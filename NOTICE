@@ -1,0 +1,42 @@
+# Attribution
+
+## This project
+
+Unofficial, community-built Wi-Fi stack for NVIDIA Jetson Orin boards with an Intel AX210.
+
+**This project is not published by, affiliated with, or endorsed by Intel Corporation or
+NVIDIA Corporation.** For help, please use this repository's issue tracker rather than contacting
+Intel, NVIDIA or the upstream projects below.
+
+The names "Intel", "AX210", "NVIDIA", "Jetson", "Orin" and "L4T" are used solely to identify the
+hardware and software this project works with.
+
+## backport-iwlwifi
+
+Intel's iwlwifi backport driver, GPL-2.0. Source is taken unmodified from
+<https://git.kernel.org/pub/scm/linux/kernel/git/iwlwifi/backport-iwlwifi.git> at the commit
+pinned in `versions.json`; the patches in `patches/backport-iwlwifi/` are applied at build time.
+Its `COPYING` file ships in `driver-src.tar.gz` and in the built driver package.
+
+## AX210 firmware
+
+Copyright (c) Intel Corporation, distributed under the terms of `LICENCE.iwlwifi_firmware`.
+The firmware files are taken unmodified from
+<https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git> at the commit
+pinned in `versions.json`, and are redistributed with that licence file.
+
+## ell and iwd
+
+ell and iwd are Copyright (c) Intel Corporation and contributors, mainly under LGPL-2.1+ (a
+few files carry other free licences). Sources: <https://git.kernel.org/pub/scm/libs/ell/ell.git>
+and <https://git.kernel.org/pub/scm/network/wireless/iwd.git>. The debs are built with Debian's
+packaging from <https://salsa.debian.org/debian/ell.git> and
+<https://salsa.debian.org/debian/iwd.git>; each deb's `debian/copyright` lists the full terms.
+The matching sources are attached to every release that ships the debs.
+
+## ell and iwd signing key
+
+`keys/ell-iwd-signing-key.asc` is Marcel Holtmann's public key, which signs the ell and iwd
+release tarballs, retrieved from kernel.org's key repository
+<https://git.kernel.org/pub/scm/docs/kernel/pgpkeys.git>. It is redistributed unmodified so
+the signature check doesn't depend on fetching a key at build time.

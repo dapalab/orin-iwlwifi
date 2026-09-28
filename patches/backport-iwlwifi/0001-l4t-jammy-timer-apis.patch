@@ -1,0 +1,63 @@
+Description: Drop timer API shims that clash with L4T r36 kernels
+ NVIDIA's L4T r36 kernels are based on Ubuntu jammy and report 5.15.148, but
+ they already provide and export timer_shutdown(), timer_shutdown_sync(),
+ timer_delete() and timer_delete_sync(). backport-include/linux/timer.h only
+ expects these from 5.15.154 or 5.15.185 onwards, so it defines static
+ versions of its own, and the build fails with "static declaration of
+ 'timer_shutdown' follows non-static declaration". This removes the four
+ shims. The kernel's own exports are used instead; build-driver.sh checks
+ their CRCs against the headers' Module.symvers.
+Forwarded: not-needed (specific to the L4T kernel's version number)
+Last-Update: 2026-09-25
+---
+--- a/backport-include/linux/timer.h
++++ b/backport-include/linux/timer.h
+@@ -67,42 +67,12 @@
+ 		__TIMER_INITIALIZER(_function, 0, 0, 0)
+ #endif
+ 
+-/* This was backported to 5.15.200, but we've seen it on some (non-vanilla) versions of 5.15.185
+- * Break vanilla 5.15.185 -> 5.15.200, any 5.15 kernel post .200 has this API */
+-#if LINUX_VERSION_IS_LESS(6,2,0) &&	\
+-	!LINUX_VERSION_IN_RANGE(5,15,185, 5,16,0)
+-static inline int timer_shutdown(struct timer_list *t)
+-{
+-	return del_timer(t);
+-}
+-
+-static inline int timer_shutdown_sync(struct timer_list *t)
+-{
+-	return del_timer_sync(t);
+-}
+-#endif
+-
+-/* This was backported to 4.19.312 and 5,4,274, but we do not support such high minor numbers use 255 instead. */
+-#if LINUX_VERSION_IS_LESS(6,1,84) &&			\
+-	!LINUX_VERSION_IN_RANGE(4,19,255, 4,20,0) &&	\
+-	!LINUX_VERSION_IN_RANGE(5,4,255, 5,5,0) &&	\
+-	!LINUX_VERSION_IN_RANGE(5,10,215, 5,11,0) &&	\
+-	!LINUX_VERSION_IN_RANGE(5,15,154, 5,16,0)
+-static inline int timer_delete_sync(struct timer_list *timer)
+-{
+-	return del_timer_sync(timer);
+-}
+-#endif /* < 6.1.84 */
+-
+-/* This was backported to 5.15.200, but we've seen it on some (non-vanilla) versions of 5.15.185
+- * Break vanilla 5.15.185 -> 5.15.200 since we're now at 5.15.202 and 5.15.202 does have those APIs. */
+-#if LINUX_VERSION_IS_LESS(6,2,0) &&	\
+-	!LINUX_VERSION_IN_RANGE(5,15,185, 5,16,0)
+-static inline int timer_delete(struct timer_list *timer)
+-{
+-	return del_timer(timer);
+-}
+-#endif
++/*
++ * L4T (NVIDIA Jetson Linux r36) kernels are Ubuntu jammy based and report
++ * 5.15.148, but already provide and export timer_shutdown(), timer_shutdown_sync(),
++ * timer_delete() and timer_delete_sync(). The version-based shims that were
++ * here clash with those declarations, so they are removed for this build.
++ */
+ 
+ #ifndef timer_container_of
+ #define timer_container_of from_timer

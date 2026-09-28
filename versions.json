@@ -1,0 +1,76 @@
+{
+  "_comment": [
+    "Single source of truth for what a release is built from. Scripts and workflows read",
+    "their pins from here; nothing is pinned anywhere else. A bump is an edit here only.",
+    "",
+    "  ell, iwd      upstream release: built from the kernel.org tarball (tarball, with the",
+    "                version in place of {v}), checked against its .sign with keys/; the",
+    "                tag's commit is recorded for reference. debian = the Debian packaging",
+    "                we build with (salsa.debian.org, pinned by commit)",
+    "  backport      backport-iwlwifi release branch and the commit we build",
+    "  firmware      linux-firmware commit and the AX210 files taken from it; release is",
+    "                the backport release the firmware drop was made for, for humans",
+    "  l4t           the Jetson Linux line we support. headers lists NVIDIA's",
+    "                nvidia-l4t-kernel-headers packages (from repo) CI test-compiles the driver against;",
+    "                container is the Ubuntu image the debs are built in (index digest)",
+    "  deb           revision is appended to the Debian version of every deb we build;",
+    "                maintainer is the Maintainer they carry",
+    "",
+    "The newest backport branch is not the highest number: core24.70 (2026-09) is newer",
+    "than core105 (2026-05). A new release/core* branch is a PR, never an automerge."
+  ],
+  "ell": {
+    "tag": "0.83",
+    "commit": "002b32d7c091993c5036956bf92d2444aca1c799",
+    "tarball": "https://mirrors.edge.kernel.org/pub/linux/libs/ell/ell-{v}.tar.xz",
+    "debian": {
+      "repo": "https://salsa.debian.org/debian/ell.git",
+      "commit": "0db206a4d52ea19813f8dc968b52204f6481f4f4",
+      "version": "0.83-1"
+    }
+  },
+  "iwd": {
+    "tag": "3.12",
+    "commit": "d003d0e593323b3de427f01284ede81ba61e9dcc",
+    "tarball": "https://mirrors.edge.kernel.org/pub/linux/network/wireless/iwd-{v}.tar.xz",
+    "debian": {
+      "repo": "https://salsa.debian.org/debian/iwd.git",
+      "commit": "965824fc9ccfd8d7586af521ee5c2795c9ffc372",
+      "version": "3.12-1"
+    }
+  },
+  "backport": {
+    "repo": "https://git.kernel.org/pub/scm/linux/kernel/git/iwlwifi/backport-iwlwifi.git",
+    "branch": "release/core24.70",
+    "commit": "8993345680c966b6906701f2509f43202d5a7e68",
+    "date": "2026-09-01"
+  },
+  "firmware": {
+    "repo": "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git",
+    "commit": "6f28c042749d9f49b8a48f557edd7d7d3d591403",
+    "release": "core24.70-49",
+    "files": ["intel/iwlwifi/iwlwifi-ty-a0-gf-a0-89.ucode", "intel/iwlwifi/iwlwifi-ty-a0-gf-a0.pnvm"],
+    "licence": "LICENSES/LICENCE.iwlwifi_firmware"
+  },
+  "l4t": {
+    "line": "36",
+    "ubuntu": "jammy",
+    "kernel": "5.15.148-tegra",
+    "repo": "https://repo.download.nvidia.com/jetson/t234",
+    "container": "ubuntu:22.04@sha256:b8b6ee6aa931ecd9d0d952abc34dc0e5f7c6a30c6bb71b079fe399fde0329c02",
+    "headers": [
+      {
+        "version": "5.15.148-tegra-36.4.4-20250616085344",
+        "sha256": "9dde2c9fde69a80279ac1d5edea170c5a67f590423e14b6c86898652118d0521"
+      },
+      {
+        "version": "5.15.148-tegra-36.4.7-20250918154033",
+        "sha256": "3dd55c1e35cb8ce524a16f6d11643c616e9ed34b0a354244849b3dcc2df07cb8"
+      }
+    ]
+  },
+  "deb": {
+    "revision": "+orin1",
+    "maintainer": "orin-iwlwifi <245609868+dapalab@users.noreply.github.com>"
+  }
+}

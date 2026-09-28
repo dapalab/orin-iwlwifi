@@ -1,0 +1,143 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Build and test everything a release is made of, from the pins in versions.json.
+#
+#   lint         shellcheck, actionlint, versions.json
+#   debs         libell0 + iwd debs and their source packages (scripts/build-debs.sh)
+#   driver-src   driver-src.tar.gz (scripts/make-driver-src.sh)
+#   driver-test  compiles driver-src.tar.gz against every NVIDIA headers package listed in
+#                versions.json, with the same build-driver.sh a board runs (D4)
+#   required     the one check branch protection requires
+#
+# release.yml runs this same workflow and publishes the artifacts it produced, so a release is
+# always exactly what these jobs built and tested.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  # In a run called by release.yml, github.workflow is "release", so a release never cancels
+  # or waits on a push build.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: shellcheck
+        run: |
+          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:stable -S warning \
+            install.sh driver/build-driver.sh scripts/*.sh
+
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -color
+
+      # Every script reads its pins with jq -e, so a missing key would fail a build half-way.
+      # Catch it here instead, along with pins that aren't full SHAs.
+      - name: Validate versions.json
+        run: |
+          jq -e '
+            all(.ell.commit, .iwd.commit, .ell.debian.commit, .iwd.debian.commit,
+                .backport.commit, .firmware.commit; test("^[0-9a-f]{40}$"))
+            and (.l4t.headers | length > 0)
+            and all(.l4t.headers[]; .sha256 | test("^[0-9a-f]{64}$"))
+            and (.l4t.container | test("@sha256:[0-9a-f]{64}$"))
+            and (.firmware.files | length > 0)
+            and (.deb.revision | test("^\\+[a-z0-9.]+$"))
+          ' versions.json
+
+  # ---------------------------------------------------------------------------
+  debs:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # seccomp=unconfined lets ell's and iwd's kernel-crypto unit tests run instead of being
+      # skipped (D5).
+      - name: Build libell0 and iwd
+        run: |
+          docker run --rm --security-opt seccomp=unconfined -v "$PWD:/src" -w /src \
+            "$(jq -r .l4t.container versions.json)" scripts/build-debs.sh
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: debs
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  driver-src:
+    runs-on: ubuntu-24.04
+    outputs:
+      headers: ${{ steps.headers.outputs.list }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Assemble driver-src.tar.gz
+        run: scripts/make-driver-src.sh
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: driver-src
+          path: dist/driver-src.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - id: headers
+        run: echo "list=$(jq -c '[.l4t.headers[].version]' versions.json)" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  driver-test:
+    needs: driver-src
+    strategy:
+      fail-fast: false
+      matrix:
+        headers: ${{ fromJson(needs.driver-src.outputs.headers) }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The tarball driver-src uploaded, not a fresh one: this tests the file a release ships.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: driver-src
+          path: dist/
+
+      - name: Compile against nvidia-l4t-kernel-headers ${{ matrix.headers }}
+        env:
+          HEADERS: ${{ matrix.headers }}
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            "$(jq -r .l4t.container versions.json)" scripts/test-driver-build.sh "$HEADERS"
+
+  # ---------------------------------------------------------------------------
+  # A check with a fixed name for branch protection. driver-test's names include the headers
+  # version, which changes whenever versions.json does; requiring those directly would leave
+  # a bump PR waiting on a check under its old name.
+  required:
+    needs: [lint, debs, driver-src, driver-test]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          bad=$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key)=\(.value.result)"' <<< "$RESULTS")
+          if [ -n "$bad" ]; then echo "::error::did not succeed: $bad"; exit 1; fi
+          echo "all jobs succeeded"

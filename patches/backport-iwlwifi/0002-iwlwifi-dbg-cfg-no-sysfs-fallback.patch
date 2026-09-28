@@ -1,0 +1,30 @@
+Description: Don't wait on the sysfs firmware fallback for iwl-dbg-cfg.ini
+ With IWLWIFI_SUPPORT_DEBUG_OVERRIDES (enabled by defconfig-iwlwifi-public),
+ iwl_drv_start() requests the optional iwl-dbg-cfg.ini synchronously during
+ probe. L4T kernels set CONFIG_FW_LOADER_USER_HELPER_FALLBACK=y, so a missing
+ file falls back to a sysfs request. At boot, udev is itself running the
+ modprobe that is probing the device and can't answer that request until
+ probe returns, so probe stalls for the full 60 s fallback timeout and Wi-Fi
+ comes up a minute late. request_firmware_direct() never uses the fallback.
+ After the change, firmware loads about 40 ms after the module does.
+Forwarded: no
+Last-Update: 2026-09-25
+---
+--- a/drivers/net/wireless/intel/iwlwifi/iwl-dbg-cfg.c
++++ b/drivers/net/wireless/intel/iwlwifi/iwl-dbg-cfg.c
+@@ -264,7 +264,14 @@
+ 		return;
+ 
+ 	/* TODO: maybe add a per-device file? */
+-	err = firmware_request_nowarn(&fw, "iwl-dbg-cfg.ini", dev);
++	/*
++	 * Optional file, requested synchronously from probe: never use the
++	 * sysfs fallback. L4T kernels force it (FW_LOADER_USER_HELPER_FALLBACK),
++	 * and when udev loads the driver at boot it can't answer the request
++	 * until probe returns, so a missing file stalled probe for the 60 s
++	 * fallback timeout.
++	 */
++	err = request_firmware_direct(&fw, "iwl-dbg-cfg.ini", dev);
+ 	if (err)
+ 		return;
+ 

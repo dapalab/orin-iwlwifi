@@ -1,0 +1,7 @@
+# Build output and downloaded sources; never committed.
+/build/
+/dist/
+/src/
+*.deb
+*.tar.gz
+*.log
