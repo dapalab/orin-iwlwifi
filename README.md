@@ -12,8 +12,8 @@ card, running Jetson Linux (L4T) 36.x / Ubuntu 22.04:
 
 installed on each board by one script.
 
-> **Status: under construction.** `install.sh` works on a test board, but there is no release
-> yet.
+> **Status: early.** Releases install and run on a Jetson Orin Nano developer kit; wider testing
+> is still under way.
 
 > **A community project.** This isn't published by, affiliated with, or endorsed by Intel or
 > NVIDIA. If something goes wrong, please open an issue in
@@ -53,7 +53,7 @@ module can't be matched to a board by version. Building it on the board always m
 anything is installed, the new modules' symbol checksums are compared with the running kernel's,
 and a mismatch stops the install.
 
-## Quick start (once there's a release)
+## Quick start
 
 On a freshly imaged board, connected by **ethernet**, with internet access:
 
