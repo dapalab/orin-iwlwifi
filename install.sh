@@ -262,6 +262,14 @@ AddressRandomization=disabled
 # 1 = use protected management frames when the AP offers them. 0 would make iwd skip 6 GHz.
 ManagementFrameProtection=1
 
+# Roaming (see D15). RoamThreshold is for 2.4 GHz; RoamThreshold5G covers 5 GHz and 6 GHz.
+# Below the threshold, iwd waits 5 s and then scans for a better access point. Tune these
+# against walk-test data.
+RoamThreshold=-70
+RoamThreshold5G=-76
+# Seconds before trying again after a failed roam, or one that landed on a weak AP (default 60).
+RoamRetryInterval=30
+
 [Scan]
 # While disconnected, rescan at least every 10 s (the default backs off to 5 minutes).
 MaximumPeriodicScanInterval=10

@@ -27,6 +27,7 @@ Upstream facts were checked on **2026-09-27** unless an entry says otherwise.
 | [D12](#d12--names-orin-iwlwifi-everywhere) | Names: `orin-iwlwifi` everywhere |
 | [D13](#d13--the-driver-ships-its-own-firmware) | The driver ships its own firmware |
 | [D14](#d14--releases-one-workflow-run-dated-tags-attested) | Releases: one workflow run, dated tags, attested |
+| [D15](#d15--roaming-thresholds-are-written-out) | Roaming thresholds are written out |
 
 ---
 
@@ -358,3 +359,34 @@ them directly would leave a bump PR waiting on a check under its old name.
 **Considered: a release on every push to `main`.** Not every merge needs to reach boards, and a
 release is what a new board installs; a person decides when.
 
+---
+
+## D15 — Roaming thresholds are written out
+
+**Decision.** `install.sh` writes iwd's roaming settings into `/etc/iwd/main.conf` explicitly:
+`RoamThreshold=-70` (2.4 GHz), `RoamThreshold5G=-76` (5 GHz and 6 GHz) and
+`RoamRetryInterval=30`.
+
+**Why.**
+
+- *Visible and easy to tune.* Roaming is the setting most likely to need changing for a given
+  site, and a key that isn't in the file is easy to miss. The two thresholds are iwd 3.12's
+  defaults; writing them out changes nothing but makes them obvious.
+- *One threshold for 5 GHz and 6 GHz.* iwd has no 6 GHz key: it applies `RoamThreshold5G` to
+  every channel above 4 GHz (`netdev_get_low_signal_threshold()` in iwd's `netdev.c`). The same
+  threshold also decides which candidate access points count as having a good signal.
+- *Retry sooner.* After a failed roam, or a roam to an access point that is still below the
+  threshold, iwd waits `RoamRetryInterval` before trying again. The default is 60 s; 30 s gives
+  a moving board more chances before the link is lost.
+
+**How roaming starts.** When the signal drops below the threshold, iwd waits 5 s, then scans:
+first the channels in the access point's neighbor report if it sends one, then channels it has
+seen the network on, then everything. It roams only to an access point with the same SSID and
+security that ranks higher than the current one. A 6 GHz link tends to fail at a stronger
+signal than a 5 GHz one (lower transmit power), so if boards lose the link instead of roaming,
+raising `RoamThreshold5G` (for example to -70) starts that process earlier. Change the values
+against walk-test data.
+
+**Considered: an `install.sh` option for the thresholds.** It's more code for something that
+rarely changes. Editing `main.conf` and restarting iwd (it reads the file only at startup) is
+enough.
