@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# install.sh: install orin-iwlwifi on a freshly imaged Jetson Orin (L4T 36.x) with an Intel AX210.
+# install.sh: install orin-iwlwifi on a Jetson Orin (L4T 36.x) with an Intel AX210.
 # https://github.com/dapalab/orin-iwlwifi
 #
 #   sudo bash install.sh                  install the release this script came from

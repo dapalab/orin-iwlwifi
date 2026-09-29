@@ -26,7 +26,17 @@ sudo bash install.sh
 sudo reboot
 \`\`\`
 
-Add \`--psk-file <SSID>.psk\` to also add a Wi-Fi network (an iwd profile; see the README).
+Options (all in the [README](https://github.com/$REPO#options)):
+
+- \`--psk-file <SSID>.psk\` adds a Wi-Fi network (an iwd profile). Repeat for more than one.
+- \`--country CC\` (e.g. \`US\`) fixes the Wi-Fi regulatory country. **Needed for 6 GHz
+  networks:** without it the AX210 guesses the country from nearby access points, 6 GHz stays
+  off until it does, and it can switch off again whenever the board is disconnected. Only set
+  the country the board is used in. \`--country none\` removes it.
+
+**Upgrading** a board with an earlier release: run this \`install.sh\` the same way, over
+ethernet, then reboot. It keeps the board's Wi-Fi profiles, country and route metrics, and
+backs up any file it replaces to \`/var/lib/orin-iwlwifi/replaced-<time>/\`.
 
 ## What's in it
 

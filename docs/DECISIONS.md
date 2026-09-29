@@ -495,9 +495,10 @@ hand-made change (for example a tuned `RoamThreshold5G`, D15) can be carried ove
 
 **Safe to run on a working board.** Nothing changes how the board is networked until it
 reboots. Installing the packages doesn't restart iwd or reload the driver, and systemd-networkd
-reads the new files only at the next boot. Each release keeps its packages in
-`/var/lib/orin-iwlwifi/<release>/`, so going back is `dpkg -i` of the older release's `.deb`
-files followed by a reboot, or running the older release's `install.sh`.
+reads the new files only at the next boot. Each release keeps its packages, including the driver
+built for the board, in `/var/lib/orin-iwlwifi/<release>/`, so going back is `dpkg -i` of the
+older release's `.deb` files followed by a reboot. (Running an older `install.sh` again only
+works for releases from 2026.09.29-1 on; earlier ones refuse an installed board.)
 
 **Why ethernet is still required.** The switch happens at the reboot. If the new driver or
 settings didn't bring Wi-Fi up, ethernet is the way back in.
