@@ -18,16 +18,19 @@ Upstream facts were checked on **2026-09-27** unless an entry says otherwise.
 | [D3](#d3--hold-every-nvidia-l4t--package) | Hold every `nvidia-l4t-*` package |
 | [D4](#d4--kernel-headers-from-nvidias-package-at-the-exact-installed-version) | Kernel headers from NVIDIA's package, at the exact installed version |
 | [D5](#d5--prebuilt-ell-and-iwd-debs-from-debians-packaging) | Prebuilt ell and iwd debs, from Debian's packaging |
-| [D6](#d6--fresh-images-only-installed-over-ethernet) | Fresh images only, installed over ethernet |
+| [D6](#d6--installed-over-ethernet) | Installed over ethernet |
 | [D7](#d7--network-setup-is-optional) | Network setup is optional |
 | [D8](#d8--new-backport-branches-are-reviewed-never-automerged) | New backport branches are reviewed, never automerged |
-| [D9](#d9--two-patches-to-backport-iwlwifi) | Two patches to backport-iwlwifi |
+| [D9](#d9--three-patches-to-backport-iwlwifi) | Three patches to backport-iwlwifi |
 | [D10](#d10--versionsjson-is-the-single-source-of-truth) | `versions.json` is the single source of truth |
 | [D11](#d11--licence-gpl-20-only) | Licence: GPL-2.0-only |
 | [D12](#d12--names-orin-iwlwifi-everywhere) | Names: `orin-iwlwifi` everywhere |
 | [D13](#d13--the-driver-ships-its-own-firmware) | The driver ships its own firmware |
 | [D14](#d14--releases-one-workflow-run-dated-tags-attested) | Releases: one workflow run, dated tags, attested |
 | [D15](#d15--roaming-thresholds-are-written-out) | Roaming thresholds are written out |
+| [D16](#d16--an-optional-fixed-regulatory-country) | An optional fixed regulatory country |
+| [D17](#d17--iwd-never-blacklists-an-access-point) | iwd never blacklists an access point |
+| [D18](#d18--installsh-can-run-again) | `install.sh` can run again |
 
 ---
 
@@ -176,10 +179,11 @@ so installing it while 22.04's iwd 1.26 is still there fails.
 
 ---
 
-## D6 — Fresh images only, installed over ethernet
+## D6 — Installed over ethernet
 
-**Decision.** `install.sh` is for freshly imaged boards, connected by ethernet with internet
-access. It doesn't migrate an existing install, run detached, or roll itself back.
+**Decision.** `install.sh` runs on a freshly imaged board, or over its own earlier install
+(D18), connected by ethernet with internet access. It doesn't migrate other Wi-Fi setups, run
+detached, or roll itself back.
 
 **Why.** Boards are treated as stateless: a new kernel or L4T release means re-imaging the board
 and running `install.sh` again. Over ethernet, a failed install can't cut the board off, so
@@ -228,9 +232,9 @@ commit date, not by name.
 
 ---
 
-## D9 — Two patches to backport-iwlwifi
+## D9 — Three patches to backport-iwlwifi
 
-**Decision.** Keep our changes to the backport driver as two small patches in
+**Decision.** Keep our changes to the backport driver as small patches in
 `patches/backport-iwlwifi/`, applied at build time. Each has a header saying what it changes and
 why.
 
@@ -243,9 +247,12 @@ why.
   during probe. At boot, that request waited the full 60 s fallback timeout, so Wi-Fi came up a
   minute late. The patch uses `request_firmware_direct()`, which never falls back; firmware
   now loads about 40 ms after the module.
+- `0003-iwlmvm-fixed-country-parameter.patch`: adds the `iwlmvm country=` parameter that
+  `install.sh --country` sets. Without it, a board with no BIOS country can come up with 6 GHz
+  off. See D16.
 
-**Considered: carrying a forked backport tree.** Two patches are easier to review, and easy to
-re-check against every new backport commit: if one stops applying, CI fails.
+**Considered: carrying a forked backport tree.** A few small patches are easier to review, and
+easy to re-check against every new backport commit: if one stops applying, CI fails.
 
 ---
 
@@ -390,3 +397,111 @@ against walk-test data.
 **Considered: an `install.sh` option for the thresholds.** It's more code for something that
 rarely changes. Editing `main.conf` and restarting iwd (it reads the file only at startup) is
 enough.
+
+---
+
+## D16 — An optional fixed regulatory country
+
+**Decision.** `install.sh --country CC` (an ISO 3166 code such as `US`) adds
+`options iwlmvm country=CC` to `/etc/modprobe.d/orin-iwlwifi.conf`. The parameter comes from
+`0003-iwlmvm-fixed-country-parameter.patch` (D9). Without `--country`, nothing changes.
+
+**Why.**
+
+- *The firmware picks the country.* The AX210 uses location-aware regulatory (LAR): the
+  firmware, not the kernel, decides which country's rules apply. On a laptop the BIOS (ACPI)
+  tells it the country. A Jetson has a device tree and no BIOS country, so the firmware starts
+  on the world domain, where every 6 GHz channel is disabled, not just passive. It then guesses
+  the country from the beacons of nearby access points. Until that guess comes in, a 6 GHz-only
+  network can't be found. It usually comes within a couple of minutes, but not always.
+- *The guess isn't sticky.* Whenever the board isn't connected, the firmware guesses again. A
+  single nearby device advertising a different country (small smart-home devices in setup mode
+  often advertise one) can move it, even when many access points around it agree on the right
+  one. If the new country has no 6 GHz, every reconnect to a 6 GHz network fails at once, and
+  iwd reports only "Operation failed".
+- *The usual tools don't reach it.* The driver manages its own regulatory domain, so
+  `iw reg set` has no effect. Intel's `SET_COUNTRY` vendor command does set the country, but the
+  firmware drops it at the next disconnect, so something would have to send it again after
+  every disconnect, and there would be a window each time where 6 GHz is off.
+
+**How the parameter works.** When the firmware starts, the driver sets the country the same way
+the vendor command does. Firmware restarts replay it through the driver's existing path. While
+the parameter is set, the driver ignores the firmware's own country updates. An invalid value
+is logged and ignored.
+
+**Why it's opt-in.** Which country's rules a radio follows is a legal matter: set only the
+country the board is used in. A board that travels, or one where the firmware's guess is good
+enough, is better off without it.
+
+**Checking and changing it.** `iw reg get` shows the country under `phy#0 (self-managed)`, and
+`dmesg | grep 'regulatory country fixed'` shows the driver applying it. To change or remove it
+on an installed board, edit `/etc/modprobe.d/orin-iwlwifi.conf` and reboot. The parameter
+needs a driver built with patch 0003. An older driver logs `unknown parameter 'country'` and
+carries on without it.
+
+**Considered: a userspace service** that sends the vendor command at boot and again whenever
+the country changes. No driver change, but it races the firmware after every disconnect, and
+it's one more service to run. The parameter is set before iwd starts and holds from then on.
+
+---
+
+## D17 — iwd never blacklists an access point
+
+**Decision.** `install.sh` sets `[Blacklist] InitialTimeout=0` in `/etc/iwd/main.conf`, which
+turns off iwd's blacklist of access points that failed a connection attempt.
+
+**Why.**
+
+- *One lost frame shouldn't cost a minute.* The kernel gives authentication and association
+  three tries each, about 100 ms apart. If all three go unanswered, iwd reports
+  "Operation failed" and, by default, puts that access point on a 60 s blacklist. A board that
+  sees only one or two access points for its network then has nothing to connect to until the
+  entry expires, even though the next attempt would most likely work.
+- *It only gets longer.* A second failure while an entry is still active multiplies its time
+  by `Multiplier` (default 30), up to `MaximumTimeout` (default 24 hours).
+- *The blacklist also blocks roaming.* A blacklisted access point ranks zero, so iwd skips it
+  when choosing where to roam, not only when reconnecting.
+
+**With it off,** a failed connect goes straight back to autoconnect: iwd scans and tries again
+within seconds, taking the best-ranked access point each time.
+
+**Trade-off.** If one access point is really broken while a good one is also in range, iwd may
+keep choosing the broken one when its signal ranks higher. A short blacklist such as
+`InitialTimeout=10` with `Multiplier=1` would avoid that at the cost of up to 10 s per failure.
+Change it in `main.conf` and restart iwd.
+
+---
+
+## D18 — `install.sh` can run again
+
+**Decision.** `install.sh` runs on a board that already has orin-iwlwifi, and installs the
+release over it. That's how a board gets a newer release or newer settings (such as D17)
+without a re-image. It needs the same things as a first install, including ethernet.
+
+**What a second run keeps.**
+
+- *Wi-Fi profiles.* Profiles in `/var/lib/iwd/` stay. A `--psk-file` with the same name replaces
+  the old one.
+- *The country.* Without `--country`, the country in `/etc/modprobe.d/orin-iwlwifi.conf` is kept.
+  `--country CC` changes it, and `--country none` removes it.
+- *Route metrics.* Without `ETH_METRIC` or `WIFI_METRIC`, the values in the existing `.network`
+  files are kept.
+
+**What it replaces.** Every other file `install.sh` writes is written again from the release,
+so a new release's settings take effect. A file whose contents would change, whether written by an
+older release or edited on the board, is first copied to
+`/var/lib/orin-iwlwifi/replaced-<time>/` under its full path. The log names each one, so a
+hand-made change (for example a tuned `RoamThreshold5G`, D15) can be carried over.
+
+**Safe to run on a working board.** Nothing changes how the board is networked until it
+reboots. Installing the packages doesn't restart iwd or reload the driver, and systemd-networkd
+reads the new files only at the next boot. Each release keeps its packages in
+`/var/lib/orin-iwlwifi/<release>/`, so going back is `dpkg -i` of the older release's `.deb`
+files followed by a reboot, or running the older release's `install.sh`.
+
+**Why ethernet is still required.** The switch happens at the reboot. If the new driver or
+settings didn't bring Wi-Fi up, ethernet is the way back in.
+
+**Considered: a separate upgrade script.** It would repeat most of `install.sh` (checks, download,
+driver build with its kernel check) and could drift from it. One script that is safe to run
+again is less to maintain.

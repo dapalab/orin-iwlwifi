@@ -11,10 +11,19 @@
 #   sudo bash install.sh --check          only run the checks; change nothing
 #   Add --psk-file FILE to also add a Wi-Fi network: an iwd profile named <SSID>.psk, as iwd
 #   writes it in /var/lib/iwd (see iwd.network(5)). It's copied in as is. Repeat for more networks.
+#   Add --country CC (ISO 3166 code, e.g. US) to fix the Wi-Fi regulatory country. Without it the
+#   AX210 guesses the country from nearby access points, and until it does, 6 GHz is off. Only
+#   set the country the board is used in. See D16. On a board that already has one, --country none
+#   removes it.
 #
 # Settings go after sudo (sudo drops variables set before it), e.g. sudo ETH_IFACE=eth0 bash ...
 #   ETH_IFACE      wired interface (default: the first on-board one)
 #   ETH_METRIC     route metric for wired (default 100); WIFI_METRIC for Wi-Fi (default 600)
+#
+# Running it again on an installed board installs the release over it (to upgrade, or to pick up
+# new settings) and keeps the country and route metrics the board has unless given again. Any
+# file it replaces with different contents is copied to /var/lib/orin-iwlwifi/replaced-<time>/
+# first. See D18.
 #
 # What it does, one function per step (see the bottom of this file):
 #   1. check          L4T 36 on arm64, AX210 present, build tools and kernel headers installed,
@@ -25,8 +34,8 @@
 #   5. install_debs   iwd, libell0, then the driver
 #   6. configure      iwd + systemd-networkd for Wi-Fi and ethernet; NetworkManager masked
 #   7. record         write down what went in: /var/lib/orin-iwlwifi/installed
-# Nothing changes how the board is networked until you reboot. It's meant for a fresh image, so
-# there is no undo: to start over, re-image. Why each step is there: docs/DECISIONS.md.
+# Nothing changes how the board is networked until you reboot. There is no undo: to start over,
+# re-image. Why each step is there: docs/DECISIONS.md.
 set -euo pipefail
 export LC_ALL=C
 umask 022
@@ -37,8 +46,9 @@ STATE=/var/lib/orin-iwlwifi
 KVER=5.15.148-tegra
 DRIVER_PKG=iwlwifi-backport-$KVER
 ETH_IFACE=${ETH_IFACE:-}
-ETH_METRIC=${ETH_METRIC:-100}
-WIFI_METRIC=${WIFI_METRIC:-600}
+ETH_METRIC=${ETH_METRIC:-}                # empty: what the board has, else 100
+WIFI_METRIC=${WIFI_METRIC:-}              # empty: what the board has, else 600
+BACKUP=$STATE/replaced-$(date +%Y%m%dT%H%M%S)
 
 log() { echo "[$(date +%T)] $*"; }
 die() { echo "[$(date +%T)] ERROR: $*" >&2; exit 1; }
@@ -48,8 +58,27 @@ pkg_version() {
   dpkg-query -W -f='${db:Status-Abbrev} ${Version}' "$1" 2>/dev/null | awk '$1 ~ /^[ih]i/ { print $2 }' || true
 }
 
-# Write stdin to a file, creating its directory.
-write() { mkdir -p "$(dirname "$1")"; cat > "$1"; log "wrote $1"; }
+# Write stdin to a file, creating its directory. A file already there with different contents
+# is copied under $BACKUP first (an earlier install, or an edit made on the board).
+write() {
+  local new
+  new=$(cat; echo .); new=${new%.}
+  mkdir -p "$(dirname "$1")"
+  if [[ -e $1 ]] && ! cmp -s "$1" <(printf '%s' "$new"); then
+    mkdir -p "$BACKUP$(dirname "$1")"
+    cp -p "$1" "$BACKUP$1"
+    log "replacing $1 (old copy: $BACKUP$1)"
+  fi
+  printf '%s' "$new" > "$1"
+  log "wrote $1"
+}
+
+# A setting the board already has: the route metric in a .network file, the fixed country.
+current_metric() { sed -n 's/^RouteMetric=\([0-9]*\)$/\1/p' "$1" 2>/dev/null | head -1; }
+current_country() {
+  sed -n 's/^options iwlmvm country=\([A-Za-z]*\)$/\1/p' /etc/modprobe.d/orin-iwlwifi.conf 2>/dev/null \
+    | tail -1 | tr '[:lower:]' '[:upper:]'
+}
 
 # NVIDIA's kernel headers tree for the running kernel. /lib/modules/<kver>/build isn't trusted:
 # on images with a custom kernel it can point into the machine the kernel was built on.
@@ -121,7 +150,6 @@ check() {
     missing+=("no IPv4 default route over $ETH_IFACE: connect the board by ethernet")
   fi
   [[ -e /run/systemd/resolve/stub-resolv.conf ]] || missing+=("systemd-resolved isn't running")
-  [[ ! -e $STATE/installed ]] || missing+=("already installed ($STATE/installed); re-image to install again")
 
   for f in "${PSK_FILES[@]}"; do
     if [[ ! -r $f ]]; then missing+=("can't read --psk-file $f")
@@ -130,6 +158,9 @@ check() {
     elif ! grep -qE '^(Passphrase|PreSharedKey)=' "$f"; then missing+=("$f has no Passphrase= or PreSharedKey=")
     fi
   done
+  if [[ -n $COUNTRY && $COUNTRY != NONE && ( ! $COUNTRY =~ ^[A-Z]{2}$ || $COUNTRY == ZZ ) ]]; then
+    missing+=("--country $COUNTRY: use a two-letter ISO 3166 country code, e.g. US (or none)")
+  fi
 
   if (( ${#missing[@]} )); then
     printf '  - %s\n' "${missing[@]}" >&2
@@ -274,6 +305,11 @@ RoamRetryInterval=30
 # While disconnected, rescan at least every 10 s (the default backs off to 5 minutes).
 MaximumPeriodicScanInterval=10
 
+[Blacklist]
+# 0 = never set an access point aside after a failed connect (see D17). The default puts it on
+# a 60 s blacklist, which turns one lost authentication into a minute or more offline.
+InitialTimeout=0
+
 [DriverQuirks]
 # Keep the kernel's wlan0 instead of recreating it.
 DefaultInterface=*
@@ -286,15 +322,23 @@ EOF
 # Written by orin-iwlwifi install.sh: Wi-Fi power save off.
 ACTION=="add", SUBSYSTEM=="net", ENV{DEVTYPE}=="wlan", RUN+="/usr/sbin/iw dev $name set power_save off"
 EOF
-  write /etc/modprobe.d/orin-iwlwifi.conf <<'EOF'
-# Written by orin-iwlwifi install.sh. 1 = active: the AX210 firmware never enters power save.
-options iwlmvm power_scheme=1
-EOF
+  {
+    echo '# Written by orin-iwlwifi install.sh. 1 = active: the AX210 firmware never enters power save.'
+    echo 'options iwlmvm power_scheme=1'
+    if [[ -n $COUNTRY ]]; then
+      echo '# Regulatory country, fixed with --country (see D16).'
+      echo "options iwlmvm country=$COUNTRY"
+    fi
+  } | write /etc/modprobe.d/orin-iwlwifi.conf
+  [[ -z $COUNTRY ]] || log "Wi-Fi regulatory country fixed to $COUNTRY"
 
   # systemd-networkd takes over both links at the reboot. The ethernet file must exist before
   # NetworkManager is masked below, or the board comes back with no wired network. See D6.
-  network_file "10-$ETH_IFACE.network" "Name=$ETH_IFACE" "$ETH_METRIC"
-  network_file 25-wlan.network Type=wlan "$WIFI_METRIC"
+  local eth_file=/etc/systemd/network/10-$ETH_IFACE.network wlan_file=/etc/systemd/network/25-wlan.network
+  ETH_METRIC=${ETH_METRIC:-$(current_metric "$eth_file")}
+  WIFI_METRIC=${WIFI_METRIC:-$(current_metric "$wlan_file")}
+  network_file "${eth_file##*/}" "Name=$ETH_IFACE" "${ETH_METRIC:-100}"
+  network_file "${wlan_file##*/}" Type=wlan "${WIFI_METRIC:-600}"
 
   # The stock wait-online waits for every link, so a board out of Wi-Fi range would hold up
   # boot for 2 minutes. Instead: online as soon as there's an IPv4 default route, on any link.
@@ -310,6 +354,7 @@ EOF
   log "/etc/resolv.conf -> systemd-resolved"
 
   local f
+  # Profiles added earlier stay; one given again with the same name replaces the old one.
   for f in "${PSK_FILES[@]}"; do
     install -d -m 700 /var/lib/iwd
     install -m 600 -o root -g root "$f" "/var/lib/iwd/$(basename "$f")"
@@ -334,6 +379,7 @@ date=$(date -Is)
 iwd=$(pkg_version iwd)
 libell0=$(pkg_version libell0)
 $DRIVER_PKG=$(pkg_version "$DRIVER_PKG")
+country=${COUNTRY:-none}
 nvidia-l4t-kernel=$(pkg_version nvidia-l4t-kernel)
 nvidia-l4t-kernel-headers=$(pkg_version nvidia-l4t-kernel-headers)
 kernel_config_sha256=$(zcat /proc/config.gz | sha256sum | cut -d' ' -f1)
@@ -343,13 +389,14 @@ EOF
 
 # ------------------------------------------------------------------------ main
 
-FROM='' PSK_FILES=() LATEST=0 CHECK_ONLY=0
+FROM='' PSK_FILES=() COUNTRY='' LATEST=0 CHECK_ONLY=0
 while (( $# )); do
   case $1 in
     --latest)   LATEST=1 ;;
     --release)  RELEASE=${2:?--release needs a tag}; shift ;;
     --from)     FROM=$(readlink -f "${2:?--from needs a directory}"); shift ;;
     --psk-file) PSK_FILES+=("$(readlink -f "${2:?--psk-file needs a file}")"); shift ;;
+    --country)  COUNTRY=${2:?--country needs a country code, e.g. US}; COUNTRY=${COUNTRY^^}; shift ;;
     --check)    CHECK_ONLY=1 ;;
     -h|--help)  sed -n '4,/^set /{/^set /d; s/^# \{0,1\}//; p}' "$0"; exit 0 ;;
     *)          die "unknown option $1 (see --help)" ;;
@@ -357,12 +404,18 @@ while (( $# )); do
   shift
 done
 
+[[ -n $COUNTRY ]] || COUNTRY=$(current_country)   # keep the board's, unless given
 check
+[[ $COUNTRY != NONE ]] || COUNTRY=''
 if (( CHECK_ONLY )); then log "ready to install; nothing was changed"; exit 0; fi
 resolve_release
 mkdir -p "$STATE"
 exec > >(tee -a "$STATE/install.log") 2>&1
 log "installing orin-iwlwifi $RELEASE${FROM:+ from $FROM}"
+if [[ -e $STATE/installed ]]; then
+  log "installing over $(sed -n 's/^release=//p' "$STATE/installed") (installed $(sed -n 's/^date=//p' "$STATE/installed"));" \
+      "keeping country ${COUNTRY:-none}"
+fi
 
 hold_l4t
 download

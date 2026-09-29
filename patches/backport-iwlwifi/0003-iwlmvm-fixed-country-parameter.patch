@@ -1,0 +1,119 @@
+Description: Add an iwlmvm "country" parameter that fixes the regulatory country
+ Devices with location-aware regulatory (LAR) get their country from the BIOS
+ (ACPI) or, failing that, guess it from nearby beacons. Device-tree platforms
+ such as Jetson have no BIOS country, so the firmware starts on the world
+ domain, where every 6 GHz channel is disabled, and a 6 GHz-only network
+ can't be found until the firmware's guess comes in. Whenever the station is
+ not associated the firmware guesses again, and one nearby device advertising
+ the wrong country is enough to move it (and 6 GHz can disappear again).
+ .
+ With iwlmvm country=XX (ISO 3166 alpha-2), the driver sets that country when
+ the firmware starts, in the same way as the SET_COUNTRY vendor command (MCC
+ API source), and ignores the firmware's country updates. Firmware restarts
+ replay it through the existing iwl_mvm_init_fw_regd() path. Without the
+ parameter nothing changes.
+Forwarded: no
+Last-Update: 2026-09-29
+---
+--- a/drivers/net/wireless/intel/iwlwifi/mvm/mvm.h
++++ b/drivers/net/wireless/intel/iwlwifi/mvm/mvm.h
+@@ -89,6 +89,7 @@
+  */
+ struct iwl_mvm_mod_params {
+ 	int power_scheme;
++	char *country;
+ };
+ extern struct iwl_mvm_mod_params iwlmvm_mod_params;
+ 
+--- a/drivers/net/wireless/intel/iwlwifi/mvm/ops.c
++++ b/drivers/net/wireless/intel/iwlwifi/mvm/ops.c
+@@ -56,6 +56,9 @@
+ module_param_named(power_scheme, iwlmvm_mod_params.power_scheme, int, 0444);
+ MODULE_PARM_DESC(power_scheme,
+ 		 "power management scheme: 1-active, 2-balanced, 3-low power, default: 2");
++module_param_named(country, iwlmvm_mod_params.country, charp, 0444);
++MODULE_PARM_DESC(country,
++		 "fixed regulatory country, ISO 3166 alpha-2 (e.g. US); the firmware's location-based country updates are ignored (default: unset)");
+ 
+ /*
+  * module init and exit functions
+--- a/drivers/net/wireless/intel/iwlwifi/mvm/nvm.c
++++ b/drivers/net/wireless/intel/iwlwifi/mvm/nvm.c
+@@ -4,6 +4,7 @@
+  * Copyright (C) 2013-2015 Intel Mobile Communications GmbH
+  * Copyright (C) 2016-2017 Intel Deutschland GmbH
+  */
++#include <linux/ctype.h>
+ #include <linux/firmware.h>
+ #include <linux/rtnetlink.h>
+ #include "iwl-trans.h"
+@@ -568,6 +569,28 @@
+ 	return resp_cp;
+ }
+ 
++/*
++ * The country module parameter, if it is a usable ISO 3166 alpha-2 code.
++ * Without a BIOS (ACPI) country the firmware starts on the world domain,
++ * which leaves 6 GHz off, and guesses the country from nearby beacons again
++ * whenever it is not associated. A fixed country avoids both.
++ */
++static bool iwl_mvm_fixed_country(char *mcc)
++{
++	const char *c = iwlmvm_mod_params.country;
++
++	if (!c || !isalpha(c[0]) || !isalpha(c[1]) || c[2] ||
++	    (toupper(c[0]) == 'Z' && toupper(c[1]) == 'Z'))
++		return false;
++
++	if (mcc) {
++		mcc[0] = toupper(c[0]);
++		mcc[1] = toupper(c[1]);
++		mcc[2] = '\0';
++	}
++	return true;
++}
++
+ int iwl_mvm_init_mcc(struct iwl_mvm *mvm)
+ {
+ 	bool tlv_lar;
+@@ -619,6 +642,28 @@
+ 			return -EIO;
+ 	}
+ 
++	/*
++	 * Set the fixed country the way the SET_COUNTRY vendor command does.
++	 * Later firmware starts replay it (iwl_mvm_init_fw_regd() above).
++	 */
++	if (iwl_mvm_fixed_country(mcc)) {
++		enum iwl_mcc_source src = MCC_SOURCE_OLD_FW;
++
++		if (iwl_mvm_is_wifi_mcc_supported(mvm))
++			src = mvm->trans->mac_cfg->device_family >
++				IWL_DEVICE_FAMILY_9000 ? MCC_SOURCE_MCC_API :
++				MCC_SOURCE_3G_LTE_HOST;
++		kfree(regd);
++		regd = iwl_mvm_get_regdomain(mvm->hw->wiphy, mcc, src, NULL);
++		if (IS_ERR_OR_NULL(regd))
++			return -EIO;
++		IWL_INFO(mvm, "regulatory country fixed to %s (country module parameter)\n",
++			 mcc);
++	} else if (iwlmvm_mod_params.country) {
++		IWL_WARN(mvm, "ignoring country module parameter '%s': not an ISO 3166 alpha-2 code\n",
++			 iwlmvm_mod_params.country);
++	}
++
+ 	retval = regulatory_set_wiphy_regd_sync(mvm->hw->wiphy, regd);
+ 
+ 	kfree(regd);
+@@ -643,6 +688,11 @@
+ 		return;
+ 	}
+ 
++	if (iwl_mvm_fixed_country(NULL)) {
++		IWL_DEBUG_LAR(mvm, "Ignore mcc update, country is fixed\n");
++		return;
++	}
++
+ 	if (WARN_ON_ONCE(!iwl_mvm_is_lar_supported(mvm)))
+ 		return;
+ 

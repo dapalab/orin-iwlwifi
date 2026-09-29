@@ -73,6 +73,18 @@ works as is. Repeat `--psk-file` for more than one network.
 sudo bash install.sh --psk-file <SSID>.psk
 ```
 
+If the board will use a **6 GHz** network, also pass the country it's used in, e.g.
+`--country US`. Without it, the AX210 guesses the country from nearby access points, and 6 GHz
+stays off until it does (and can switch off again when the guess changes).
+[D16](docs/DECISIONS.md#d16--an-optional-fixed-regulatory-country) explains why.
+
+To **upgrade** an installed board, or give it newer settings, run a newer release's
+`install.sh` the same way, over ethernet, then reboot. The board keeps its Wi-Fi profiles, its
+country (`--country none` removes it) and its route metrics. Any file that `install.sh` replaces
+with different contents, including one edited by hand, is copied to
+`/var/lib/orin-iwlwifi/replaced-<time>/` first.
+[D18](docs/DECISIONS.md#d18--installsh-can-run-again) has the details.
+
 `install.sh` puts every `nvidia-l4t-*` package **on hold** before it runs apt, so an
 `apt upgrade` can't replace your kernel behind your back. A new L4T release means re-imaging
 the board, then running `install.sh` again. [Behind the scenes](docs/DECISIONS.md) explains why.
