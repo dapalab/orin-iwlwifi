@@ -570,10 +570,13 @@ label, for example `2026.09.30-1-ftfix1`.
   README's download link skip it. A board gets it only from its own `install.sh` or with
   `--release <tag>`.
 - *Its packages sort below the release.* A pre-release can give iwd its own version suffix
-  (`iwd.revision` in `versions.json`, e.g. `+orin1~ftfix1`), and patches in `patches/iwd/`
-  are added to Debian's quilt series, so the source package carries them. The `~` sorts below
-  `+orin1`: installing the pre-release over a release is a downgrade `dpkg -i` accepts, and the
-  next release installs over it without any forcing.
+  (`iwd.revision` in `versions.json`, e.g. `+orin0.ftfix2`), and patches in `patches/iwd/`
+  are added to Debian's quilt series, so the source package carries them. `orin0` sorts below
+  the release's `orin1`: installing the pre-release over a release is a downgrade `dpkg -i`
+  accepts, and the next release installs over it as an ordinary upgrade. The version has no
+  `~` (Debian's usual "sorts lower" mark): GitHub turns a `~` in an uploaded file name into a
+  `.`, and `install.sh` then can't find the files `SHA256SUMS` lists. The release build
+  refuses file names GitHub would change.
 - *Same build and checks.* It goes through the same build workflow, checksums and
   attestations as a release.
 

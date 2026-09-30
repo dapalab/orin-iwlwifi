@@ -26,6 +26,11 @@ cp libell0_*_arm64.deb iwd_*_arm64.deb ./*.dsc ./*.orig.tar.xz ./*.debian.tar.xz
 sed "s/^RELEASE=@RELEASE@ /RELEASE=$TAG /" "$TOP/install.sh" > "$REL/install.sh"
 grep -q "^RELEASE=$TAG " "$REL/install.sh" || { echo "couldn't set RELEASE in install.sh" >&2; exit 1; }
 cd "$REL"
+# GitHub rewrites other characters in uploaded file names (a ~ becomes a .), and install.sh then
+# can't find the files SHA256SUMS lists, so refuse them here.
+for f in *; do
+  [[ $f =~ ^[A-Za-z0-9._+-]+$ ]] || { echo "file name GitHub would rename: $f" >&2; exit 1; }
+done
 sha256sum -- * > SHA256SUMS.tmp
 mv SHA256SUMS.tmp SHA256SUMS
 ls -l "$REL"
