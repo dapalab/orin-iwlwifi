@@ -4,20 +4,23 @@ Description: Add an iwlmvm "country" parameter that fixes the regulatory country
  such as Jetson have no BIOS country, so the firmware starts on the world
  domain, where every 6 GHz channel is disabled, and a 6 GHz-only network
  can't be found until the firmware's guess comes in. Whenever the station is
- not associated the firmware guesses again, and one nearby device advertising
- the wrong country is enough to move it (and 6 GHz can disappear again).
+ not associated the firmware guesses again, every few seconds, and one nearby
+ device advertising the wrong country is enough to move it.
  .
  With iwlmvm country=XX (ISO 3166 alpha-2), the driver sets that country when
  the firmware starts, in the same way as the SET_COUNTRY vendor command (MCC
- API source), and ignores the firmware's country updates. Firmware restarts
- replay it through the existing iwl_mvm_init_fw_regd() path. Without the
- parameter nothing changes.
+ API source), and firmware restarts replay it through the existing
+ iwl_mvm_init_fw_regd() path. The firmware applies its own guesses before it
+ reports them (MCC_CHUB_UPDATE), so each report is answered by setting the
+ fixed country again; only ignoring them left the firmware on its guess, with
+ no 6 GHz, until it restarted, while the host still showed the fixed country.
+ Without the parameter nothing changes.
 Forwarded: no
-Last-Update: 2026-09-29
+Last-Update: 2026-09-30
 ---
 --- a/drivers/net/wireless/intel/iwlwifi/mvm/mvm.h
 +++ b/drivers/net/wireless/intel/iwlwifi/mvm/mvm.h
-@@ -89,6 +89,7 @@
+@@ -89,6 +89,7 @@ extern const struct ieee80211_ops iwl_mvm_mld_hw_ops;
   */
  struct iwl_mvm_mod_params {
  	int power_scheme;
@@ -25,18 +28,6 @@ Last-Update: 2026-09-29
  };
  extern struct iwl_mvm_mod_params iwlmvm_mod_params;
  
---- a/drivers/net/wireless/intel/iwlwifi/mvm/ops.c
-+++ b/drivers/net/wireless/intel/iwlwifi/mvm/ops.c
-@@ -56,6 +56,9 @@
- module_param_named(power_scheme, iwlmvm_mod_params.power_scheme, int, 0444);
- MODULE_PARM_DESC(power_scheme,
- 		 "power management scheme: 1-active, 2-balanced, 3-low power, default: 2");
-+module_param_named(country, iwlmvm_mod_params.country, charp, 0444);
-+MODULE_PARM_DESC(country,
-+		 "fixed regulatory country, ISO 3166 alpha-2 (e.g. US); the firmware's location-based country updates are ignored (default: unset)");
- 
- /*
-  * module init and exit functions
 --- a/drivers/net/wireless/intel/iwlwifi/mvm/nvm.c
 +++ b/drivers/net/wireless/intel/iwlwifi/mvm/nvm.c
 @@ -4,6 +4,7 @@
@@ -47,7 +38,7 @@ Last-Update: 2026-09-29
  #include <linux/firmware.h>
  #include <linux/rtnetlink.h>
  #include "iwl-trans.h"
-@@ -568,6 +569,28 @@
+@@ -568,6 +569,38 @@ exit:
  	return resp_cp;
  }
  
@@ -73,10 +64,20 @@ Last-Update: 2026-09-29
 +	return true;
 +}
 +
++/* The source the fixed country is set with: as the SET_COUNTRY vendor command */
++static enum iwl_mcc_source iwl_mvm_fixed_country_src(struct iwl_mvm *mvm)
++{
++	if (!iwl_mvm_is_wifi_mcc_supported(mvm))
++		return MCC_SOURCE_OLD_FW;
++
++	return mvm->trans->mac_cfg->device_family > IWL_DEVICE_FAMILY_9000 ?
++		MCC_SOURCE_MCC_API : MCC_SOURCE_3G_LTE_HOST;
++}
++
  int iwl_mvm_init_mcc(struct iwl_mvm *mvm)
  {
  	bool tlv_lar;
-@@ -619,6 +642,28 @@
+@@ -619,6 +652,24 @@ int iwl_mvm_init_mcc(struct iwl_mvm *mvm)
  			return -EIO;
  	}
  
@@ -85,14 +86,10 @@ Last-Update: 2026-09-29
 +	 * Later firmware starts replay it (iwl_mvm_init_fw_regd() above).
 +	 */
 +	if (iwl_mvm_fixed_country(mcc)) {
-+		enum iwl_mcc_source src = MCC_SOURCE_OLD_FW;
-+
-+		if (iwl_mvm_is_wifi_mcc_supported(mvm))
-+			src = mvm->trans->mac_cfg->device_family >
-+				IWL_DEVICE_FAMILY_9000 ? MCC_SOURCE_MCC_API :
-+				MCC_SOURCE_3G_LTE_HOST;
 +		kfree(regd);
-+		regd = iwl_mvm_get_regdomain(mvm->hw->wiphy, mcc, src, NULL);
++		regd = iwl_mvm_get_regdomain(mvm->hw->wiphy, mcc,
++					     iwl_mvm_fixed_country_src(mvm),
++					     NULL);
 +		if (IS_ERR_OR_NULL(regd))
 +			return -EIO;
 +		IWL_INFO(mvm, "regulatory country fixed to %s (country module parameter)\n",
@@ -105,15 +102,50 @@ Last-Update: 2026-09-29
  	retval = regulatory_set_wiphy_regd_sync(mvm->hw->wiphy, regd);
  
  	kfree(regd);
-@@ -643,6 +688,11 @@
- 		return;
- 	}
+@@ -631,13 +682,33 @@ void iwl_mvm_rx_chub_update_mcc(struct iwl_mvm *mvm,
+ 	struct iwl_rx_packet *pkt = rxb_addr(rxb);
+ 	struct iwl_mcc_chub_notif *notif = (void *)pkt->data;
+ 	enum iwl_mcc_source src;
+-	char mcc[3];
++	char mcc[3], fixed[3];
+ 	struct ieee80211_regdomain *regd;
+ 	int wgds_tbl_idx;
+ 	bool changed = false;
  
-+	if (iwl_mvm_fixed_country(NULL)) {
-+		IWL_DEBUG_LAR(mvm, "Ignore mcc update, country is fixed\n");
+ 	lockdep_assert_held(&mvm->mutex);
+ 
++	if (iwl_mvm_fixed_country(fixed)) {
++		/*
++		 * By the time this arrives the firmware has already switched
++		 * to the country it guessed from nearby beacons, whatever the
++		 * host does with it, and it guesses again every few seconds
++		 * while not associated. Set the fixed country again, or the
++		 * firmware keeps its guess (and possibly no 6 GHz) until it
++		 * restarts, while the host still shows the fixed country.
++		 */
++		IWL_DEBUG_LAR(mvm,
++			      "Firmware chose mcc 0x%04x (src %d), setting %s again\n",
++			      le16_to_cpu(notif->mcc), notif->source_id, fixed);
++		regd = iwl_mvm_get_regdomain(mvm->hw->wiphy, fixed,
++					     iwl_mvm_fixed_country_src(mvm),
++					     NULL);
++		if (!IS_ERR_OR_NULL(regd))
++			kfree(regd);
 +		return;
 +	}
 +
- 	if (WARN_ON_ONCE(!iwl_mvm_is_lar_supported(mvm)))
+ 	if (iwl_mvm_is_vif_assoc(mvm) && notif->source_id == MCC_SOURCE_WIFI) {
+ 		IWL_DEBUG_LAR(mvm, "Ignore mcc update while associated\n");
  		return;
+--- a/drivers/net/wireless/intel/iwlwifi/mvm/ops.c
++++ b/drivers/net/wireless/intel/iwlwifi/mvm/ops.c
+@@ -56,6 +56,9 @@ struct iwl_mvm_mod_params iwlmvm_mod_params = {
+ module_param_named(power_scheme, iwlmvm_mod_params.power_scheme, int, 0444);
+ MODULE_PARM_DESC(power_scheme,
+ 		 "power management scheme: 1-active, 2-balanced, 3-low power, default: 2");
++module_param_named(country, iwlmvm_mod_params.country, charp, 0444);
++MODULE_PARM_DESC(country,
++		 "fixed regulatory country, ISO 3166 alpha-2 (e.g. US); the firmware's location-based country updates are ignored (default: unset)");
  
+ /*
+  * module init and exit functions

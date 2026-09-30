@@ -111,8 +111,8 @@ whenever the board is disconnected, and a single nearby device advertising a dif
 can switch 6 GHz off again. On a 6 GHz-only network, both show up as iwd failing to connect
 with "Operation failed".
 
-*With it,* the driver sets that country each time the firmware starts, and ignores the
-firmware's guesses. 6 GHz is on from boot and stays on.
+*With it,* the driver sets that country each time the firmware starts, and sets it again
+whenever the firmware makes a guess of its own. 6 GHz is on from boot and stays on.
 
 Only set the country the board is really used in: it decides which channels and power levels
 the radio may use, which is a legal matter. For a board that moves between countries, leave it

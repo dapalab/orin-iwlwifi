@@ -447,9 +447,11 @@ gap matters.
   every disconnect, and there would be a window each time where 6 GHz is off.
 
 **How the parameter works.** When the firmware starts, the driver sets the country the same way
-the vendor command does. Firmware restarts replay it through the driver's existing path. While
-the parameter is set, the driver ignores the firmware's own country updates. An invalid value
-is logged and ignored.
+the vendor command does. Firmware restarts replay it through the driver's existing path. The
+firmware applies a guess before it reports it, so ignoring its country updates is not enough:
+the firmware would stay on its guess while the kernel still showed the fixed country. Instead,
+the driver answers each update by setting the fixed country again. An invalid value is logged
+and ignored.
 
 **Why it's opt-in.** Which country's rules a radio follows is a legal matter: set only the
 country the board is used in. A board that travels, or one where the firmware's guess is good
