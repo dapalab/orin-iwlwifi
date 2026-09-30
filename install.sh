@@ -36,7 +36,10 @@
 #   7. record         write down what went in: /var/lib/orin-iwlwifi/installed
 # Nothing changes how the board is networked until you reboot. There is no undo: to start over,
 # re-image. Why each step is there: docs/DECISIONS.md.
-set -euo pipefail
+set -Eeuo pipefail
+# set -e exits without a word; say where, so a half-done install is never mistaken for a done one.
+on_error() { local rc=$?; echo "[$(date +%T)] ERROR: install.sh line $1: $2 (exit $rc)" >&2; }
+trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
 export LC_ALL=C
 umask 022
 
@@ -74,10 +77,12 @@ write() {
 }
 
 # A setting the board already has: the route metric in a .network file, the fixed country.
-current_metric() { sed -n 's/^RouteMetric=\([0-9]*\)$/\1/p' "$1" 2>/dev/null | head -1; }
+# Nothing (and success) when the file isn't there yet, as on a freshly flashed board.
+current_metric() { [[ -r $1 ]] || return 0; sed -n '/^RouteMetric=[0-9]*$/{s/^RouteMetric=//p;q}' "$1"; }
 current_country() {
-  sed -n 's/^options iwlmvm country=\([A-Za-z]*\)$/\1/p' /etc/modprobe.d/orin-iwlwifi.conf 2>/dev/null \
-    | tail -1 | tr '[:lower:]' '[:upper:]'
+  local f=/etc/modprobe.d/orin-iwlwifi.conf
+  [[ -r $f ]] || return 0
+  sed -n 's/^options iwlmvm country=\([A-Za-z]*\)$/\1/p' "$f" | tail -1 | tr '[:lower:]' '[:upper:]'
 }
 
 # NVIDIA's kernel headers tree for the running kernel. /lib/modules/<kver>/build isn't trusted:
