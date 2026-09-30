@@ -8,9 +8,7 @@ card, running Jetson Linux (L4T) 36.x / Ubuntu 22.04:
   with the in-tree one gets the 5.15 version),
 - the latest [iwd](https://git.kernel.org/pub/scm/network/wireless/iwd.git) and
   [ell](https://git.kernel.org/pub/scm/libs/ell/ell.git), in place of wpa_supplicant and
-  NetworkManager,
-
-installed on each board by one script.
+  NetworkManager, installed on each board by one script.
 
 > **Status: early.** Releases install and run on a Jetson Orin Nano developer kit; wider testing
 > is still under way.
