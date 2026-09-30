@@ -14,7 +14,7 @@ umask 022
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 TAG=${1:?usage: assemble-release.sh TAG [DIR]}
 REL=${2:-$TOP/dist/release}
-[[ $TAG =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+$ ]] || { echo "tag must look like 2026.09.28-1" >&2; exit 2; }
+[[ $TAG =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+(-[a-z0-9]+)?$ ]] || { echo "tag must look like 2026.09.28-1 (or 2026.09.28-1-label for a pre-release)" >&2; exit 2; }
 
 rm -rf "$REL"
 mkdir -p "$REL"

@@ -32,6 +32,7 @@ Upstream facts were checked on **2026-09-27** unless an entry says otherwise.
 | [D17](#d17--iwd-never-blacklists-an-access-point) | iwd never blacklists an access point |
 | [D18](#d18--installsh-can-run-again) | `install.sh` can run again |
 | [D19](#d19--iwds-key-cache-pmksa-is-off) | iwd's key cache (PMKSA) is off |
+| [D20](#d20--pre-releases-for-testing-changes-on-boards) | Pre-releases for testing changes on boards |
 
 ---
 
@@ -547,8 +548,36 @@ failed. With the cache off, those roams complete like any other, in about 60 ms.
 reusing a cached key (about 60 ms). FT roams don't use the cache, so they are unaffected.
 
 **Until iwd is fixed.** The fix, which stops iwd using the cache for FT roams, is being
-proposed upstream. Once a release ships an iwd with it, `DisablePMKSA` comes out again.
+proposed upstream and tested in a pre-release (D20). Once a release ships an iwd with it,
+`DisablePMKSA` comes out again.
 
 **Considered: clearing the cache after each full reconnect.** It would also avoid the stale
 key, but the cached keys are still valid for reconnecting to those access points, and networks
 that roam without FT use them to roam quickly. The problem is only that FT looks in the cache.
+
+---
+
+## D20 — Pre-releases for testing changes on boards
+
+**Decision.** A change that needs testing on real boards before it goes into a release, such as
+a patch to iwd, can be published as a pre-release from its own branch: Actions > release > Run
+workflow, on that branch, with *Pre-release* ticked and a tag made of a release tag plus a
+label, for example `2026.09.30-1-ftfix1`.
+
+**How it differs from a release.**
+
+- *Never picked by accident.* GitHub doesn't mark it latest, so `install.sh --latest` and the
+  README's download link skip it. A board gets it only from its own `install.sh` or with
+  `--release <tag>`.
+- *Its packages sort below the release.* A pre-release can give iwd its own version suffix
+  (`iwd.revision` in `versions.json`, e.g. `+orin1~ftfix1`), and patches in `patches/iwd/`
+  are added to Debian's quilt series, so the source package carries them. The `~` sorts below
+  `+orin1`: installing the pre-release over a release is a downgrade `dpkg -i` accepts, and the
+  next release installs over it without any forcing.
+- *Same build and checks.* It goes through the same build workflow, checksums and
+  attestations as a release.
+
+**Why a label, not the next number.** Released tag names can't be reused, even after a
+release is deleted, so dated numbers are kept for releases.
+
+**Going back.** Run a regular release's `install.sh` again (D18).

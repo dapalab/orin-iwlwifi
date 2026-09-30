@@ -11,8 +11,26 @@ TAG=${1:?usage: release-notes.sh TAG [OWNER/REPO]}
 REPO=${2:-dapalab/orin-iwlwifi}
 j() { jq -er "$1" "$TOP/versions.json"; }
 REV=$(j .deb.revision)
+IWD_REV=$(jq -r '.iwd.revision // .deb.revision' "$TOP/versions.json")
 HEADERS=$(jq -r '[.l4t.headers[].version | sub("^.*-tegra-"; "") | sub("-[0-9]+$"; "")] | join(", ")' \
   "$TOP/versions.json")
+
+# A pre-release (tag with a label, D20) says so first, with any iwd patches it carries.
+if [[ $TAG =~ -[0-9]+-[a-z0-9]+$ ]]; then
+  echo "> **Pre-release, for testing.** \`install.sh --latest\` never picks it, and the next"
+  echo "> regular release installs over it. To go back to a regular release, run that release's"
+  echo "> \`install.sh\` the same way."
+  echo
+fi
+PATCHES=("$TOP"/patches/iwd/*.patch)
+if [[ -e ${PATCHES[0]} ]]; then
+  echo "iwd carries these patches on top of $(j .iwd.tag):"
+  echo
+  for p in "${PATCHES[@]}"; do
+    echo "- \`${p##*/}\`: $(sed -n 's/^Description: //p' "$p" | head -1)"
+  done
+  echo
+fi
 
 cat <<EOF
 ## Install
@@ -42,7 +60,7 @@ backs up any file it replaces to \`/var/lib/orin-iwlwifi/replaced-<time>/\`.
 
 | Component | Version | From |
 |---|---|---|
-| iwd | $(j .iwd.tag) (deb \`$(j .iwd.debian.version)$REV\`) | kernel.org release tarball, signature checked; Debian packaging \`$(j .iwd.debian.commit | cut -c1-12)\` |
+| iwd | $(j .iwd.tag) (deb \`$(j .iwd.debian.version)$IWD_REV\`) | kernel.org release tarball, signature checked; Debian packaging \`$(j .iwd.debian.commit | cut -c1-12)\` |
 | ell | $(j .ell.tag) (deb \`$(j .ell.debian.version)$REV\`) | kernel.org release tarball, signature checked; Debian packaging \`$(j .ell.debian.commit | cut -c1-12)\` |
 | iwlwifi backport | \`$(j .backport.branch)\` at \`$(j .backport.commit | cut -c1-12)\` ($(j .backport.date)) | built on the board by \`install.sh\` |
 | AX210 firmware | $(j .firmware.release): $(jq -r '[.firmware.files[] | sub("^.*/"; "")] | join(", ")' "$TOP/versions.json") | linux-firmware \`$(j .firmware.commit | cut -c1-12)\` |

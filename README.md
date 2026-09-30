@@ -149,6 +149,10 @@ the driver built for this board, stay in `/var/lib/orin-iwlwifi/<release>/`: to 
 `sudo dpkg -i` the older release's `.deb` files there and reboot.
 [D18](docs/DECISIONS.md#d18--installsh-can-run-again) has the details.
 
+**Pre-releases** (tags with a label, e.g. `2026.09.30-1-ftfix1`) are test builds of a single
+change. `--latest` never picks them, and the next release installs over them.
+[D20](docs/DECISIONS.md#d20--pre-releases-for-testing-changes-on-boards) explains how they work.
+
 ## The kernel is held
 
 `install.sh` puts every `nvidia-l4t-*` package **on hold** before it runs apt, so an

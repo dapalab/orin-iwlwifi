@@ -2,8 +2,10 @@
 #
 # Publish a release: run build.yml, then publish exactly the files it built and tested.
 #
-# Started by hand (Actions > release > Run workflow), from main only. The tag is the date plus a
-# counter, e.g. 2026.09.28-1, and is never reused or moved: a fix is a new release.
+# Started by hand (Actions > release > Run workflow). A release comes from main only; its tag is
+# the date plus a counter, e.g. 2026.09.28-1, and is never reused or moved: a fix is a new
+# release. A pre-release (D20) can come from any branch, needs a tag with a label, e.g.
+# 2026.09.30-1-ftfix1, and is never marked latest, so install.sh --latest doesn't pick it.
 name: release
 
 on:
@@ -13,6 +15,11 @@ on:
         description: 'Tag, e.g. 2026.09.28-1 (leave empty for today, next free number)'
         required: false
         default: ''
+      prerelease:
+        description: 'Pre-release (any branch; tag required, with a label, e.g. 2026.09.30-1-ftfix1)'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -23,7 +30,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || inputs.prerelease
     uses: ./.github/workflows/build.yml
 
   publish:
@@ -40,16 +47,23 @@ jobs:
         id: tag
         env:
           WANT: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
           if [ -n "$WANT" ]; then
             tag=$WANT
+          elif [ "$PRERELEASE" = true ]; then
+            echo "::error::a pre-release needs a tag, e.g. 2026.09.30-1-ftfix1"; exit 1
           else
             today=$(date -u +%Y.%m.%d)
-            n=$(git ls-remote --tags --refs origin "refs/tags/$today-*" | sed 's|.*/[0-9.]*-||' | sort -n | tail -1)
+            n=$(git ls-remote --tags --refs origin "refs/tags/$today-*" | sed 's|.*/[0-9.]*-||; s|-.*||' | sort -n | tail -1)
             tag=$today-$(( ${n:-0} + 1 ))
           fi
-          if ! [[ $tag =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+$ ]]; then
+          if [ "$PRERELEASE" = true ]; then
+            if ! [[ $tag =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+-[a-z0-9]+$ ]]; then
+              echo "::error::pre-release tag '$tag' must look like 2026.09.30-1-ftfix1"; exit 1
+            fi
+          elif ! [[ $tag =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+$ ]]; then
             echo "::error::tag '$tag' must look like 2026.09.28-1"; exit 1
           fi
           # Tags are never reused, so refuse rather than overwrite.
@@ -83,6 +97,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
+          if [ "$PRERELEASE" = true ]; then kind=(--prerelease --latest=false); else kind=(--latest); fi
           gh release create "$TAG" dist/release/* \
-            --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md --latest
+            --target "$GITHUB_SHA" --title "$TAG" --notes-file notes.md "${kind[@]}"

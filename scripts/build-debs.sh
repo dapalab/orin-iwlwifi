@@ -25,6 +25,8 @@ apt-get update -qq
 apt-get install -qq -y --no-install-recommends ca-certificates curl gnupg jq xz-utils dpkg-dev fakeroot > /dev/null
 j() { jq -er "$1" "$TOP/versions.json"; }
 REVISION=$(j .deb.revision)
+# iwd.revision, when set, replaces deb.revision for iwd only (a pre-release, D20).
+IWD_REVISION=$(jq -r '.iwd.revision // .deb.revision' "$TOP/versions.json")
 MAINTAINER=$(j .deb.maintainer)
 
 rm -rf "$WORK"
@@ -55,12 +57,12 @@ fetch() {
     || die "$name packaging at $commit isn't version $want (versions.json)"
 }
 
-# rebrand <dir> <changelog line>...: our Maintainer (without Debian's Uploaders), and a
-# changelog entry for our version: Debian's + deb.revision.
+# rebrand <dir> <revision> <changelog line>...: our Maintainer (without Debian's Uploaders), and
+# a changelog entry for our version: Debian's + revision.
 rebrand() {
-  local dir=$1 src ver line; shift
+  local dir=$1 rev=$2 src ver line; shift 2
   src=$(dpkg-parsechangelog -l "$dir/debian/changelog" -S Source)
-  ver=$(dpkg-parsechangelog -l "$dir/debian/changelog" -S Version)$REVISION
+  ver=$(dpkg-parsechangelog -l "$dir/debian/changelog" -S Version)$rev
   sed -i -e "s|^Maintainer:.*|Maintainer: $MAINTAINER|" -e '/^Uploaders:/,/^[^ ]/{/^Uploaders:/d;/^ /d}' \
     "$dir/debian/control"
   { echo "$src ($ver) jammy; urgency=medium"; echo
@@ -86,7 +88,7 @@ build() {
 # --- ell --------------------------------------------------------------------------------------
 fetch ell
 ELL_DIR=$DIR ELL_V=$(j .ell.tag)
-rebrand "$ELL_DIR" "Rebuild for Ubuntu 22.04 (Jetson Linux 36) by https://github.com/dapalab/orin-iwlwifi"
+rebrand "$ELL_DIR" "$REVISION" "Rebuild for Ubuntu 22.04 (Jetson Linux 36) by https://github.com/dapalab/orin-iwlwifi"
 build "$ELL_DIR"
 ELL_VER=$(dpkg-parsechangelog -l "$ELL_DIR/debian/changelog" -S Version)
 # iwd builds against the ell we just built, not Ubuntu's 0.49.
@@ -103,9 +105,20 @@ sed -i 's|^usr/lib/systemd/|lib/systemd/|' "$IWD_DIR/debian/iwd.install"
 # The first ${shlibs:Depends} in debian/control is the iwd package's.
 sed -i "0,/^ \${shlibs:Depends},\$/s//&\n libell0 (>= $ELL_V),/" "$IWD_DIR/debian/control"
 grep -q "^ libell0 (>= $ELL_V),$" "$IWD_DIR/debian/control" || die "couldn't add the libell0 dependency"
-rebrand "$IWD_DIR" "Rebuild for Ubuntu 22.04 (Jetson Linux 36) by https://github.com/dapalab/orin-iwlwifi" \
+# Our iwd patches (patches/iwd/, DEP-3 headers) go into Debian's quilt series, so the source
+# package carries them too.
+IWD_NOTES=()
+for p in "$TOP"/patches/iwd/*.patch; do
+  [[ -e $p ]] || continue
+  cp "$p" "$IWD_DIR/debian/patches/"
+  echo "${p##*/}" >> "$IWD_DIR/debian/patches/series"
+  IWD_NOTES+=("${p##*/}: $(sed -n 's/^Description: //p' "$p" | head -1)")
+done
+rebrand "$IWD_DIR" "$IWD_REVISION" \
+  "Rebuild for Ubuntu 22.04 (Jetson Linux 36) by https://github.com/dapalab/orin-iwlwifi" \
   "systemd units under /lib/systemd; build-depends on systemd, not systemd-dev." \
-  "Depends on libell0 (>= $ELL_V), the ell it is built and tested with."
+  "Depends on libell0 (>= $ELL_V), the ell it is built and tested with." \
+  "${IWD_NOTES[@]}"
 build "$IWD_DIR"
 
 # --- output -----------------------------------------------------------------------------------

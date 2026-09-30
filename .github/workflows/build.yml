@@ -56,6 +56,7 @@ jobs:
             and (.l4t.container | test("@sha256:[0-9a-f]{64}$"))
             and (.firmware.files | length > 0)
             and (.deb.revision | test("^\\+[a-z0-9.]+$"))
+            and ((.iwd.revision // .deb.revision) | test("^\\+[a-z0-9.]+(~[a-z0-9.]+)?$"))
           ' versions.json
 
   # ---------------------------------------------------------------------------

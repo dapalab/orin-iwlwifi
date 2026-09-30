@@ -5,8 +5,8 @@
 # https://github.com/dapalab/orin-iwlwifi
 #
 #   sudo bash install.sh                  install the release this script came from
-#   sudo bash install.sh --latest         install the newest release
-#   sudo bash install.sh --release TAG    install a given release
+#   sudo bash install.sh --latest         install the newest release (never a pre-release)
+#   sudo bash install.sh --release TAG    install a given release (or pre-release, e.g. 2026.09.30-1-ftfix1)
 #   sudo bash install.sh --from DIR       install from release files already in DIR (for testing)
 #   sudo bash install.sh --check          only run the checks; change nothing
 #   Add --psk-file FILE to also add a Wi-Fi network: an iwd profile named <SSID>.psk, as iwd
@@ -195,7 +195,7 @@ resolve_release() {
     RELEASE=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")
     RELEASE=${RELEASE##*/}
   fi
-  [[ $RELEASE =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+$ ]] \
+  [[ $RELEASE =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9]+(-[a-z0-9]+)?$ ]] \
     || die "no release to install (got '$RELEASE'); use --latest or --release <tag>"
 }
 
