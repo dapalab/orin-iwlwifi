@@ -297,9 +297,12 @@ ManagementFrameProtection=1
 # Below the threshold, iwd waits 5 s and then scans for a better access point. Tune these
 # against walk-test data.
 RoamThreshold=-70
-RoamThreshold5G=-76
+RoamThreshold5G=-70
 # Seconds before trying again after a failed roam, or one that landed on a weak AP (default 60).
 RoamRetryInterval=30
+# Don't reuse cached keys (PMKSA): iwd 3.12 can apply an out-of-date one to a Fast Transition,
+# and the access point then refuses the roam (see D19).
+DisablePMKSA=true
 
 [Scan]
 # While disconnected, rescan at least every 10 s (the default backs off to 5 minutes).

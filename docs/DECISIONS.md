@@ -31,6 +31,7 @@ Upstream facts were checked on **2026-09-27** unless an entry says otherwise.
 | [D16](#d16--an-optional-fixed-regulatory-country) | An optional fixed regulatory country |
 | [D17](#d17--iwd-never-blacklists-an-access-point) | iwd never blacklists an access point |
 | [D18](#d18--installsh-can-run-again) | `install.sh` can run again |
+| [D19](#d19--iwds-key-cache-pmksa-is-off) | iwd's key cache (PMKSA) is off |
 
 ---
 
@@ -371,32 +372,52 @@ release is what a new board installs; a person decides when.
 ## D15 — Roaming thresholds are written out
 
 **Decision.** `install.sh` writes iwd's roaming settings into `/etc/iwd/main.conf` explicitly:
-`RoamThreshold=-70` (2.4 GHz), `RoamThreshold5G=-76` (5 GHz and 6 GHz) and
+`RoamThreshold=-70` (2.4 GHz), `RoamThreshold5G=-70` (5 GHz and 6 GHz) and
 `RoamRetryInterval=30`.
 
 **Why.**
 
 - *Visible and easy to tune.* Roaming is the setting most likely to need changing for a given
-  site, and a key that isn't in the file is easy to miss. The two thresholds are iwd 3.12's
-  defaults; writing them out changes nothing but makes them obvious.
+  site, and a key that isn't in the file is easy to miss.
 - *One threshold for 5 GHz and 6 GHz.* iwd has no 6 GHz key: it applies `RoamThreshold5G` to
   every channel above 4 GHz (`netdev_get_low_signal_threshold()` in iwd's `netdev.c`). The same
   threshold also decides which candidate access points count as having a good signal.
+- *-70, not iwd's default of -76.* In walk tests on a 6 GHz network with several access
+  points, boards at -76 lost the link before they tried to roam: a 6 GHz link fails at a
+  stronger signal than a 5 GHz one (lower client transmit power), and the signal often fell
+  from -76 to nothing within seconds. At -70 the same walks roamed by Fast Transition, each
+  handoff taking about 60 ms.
 - *Retry sooner.* After a failed roam, or a roam to an access point that is still below the
   threshold, iwd waits `RoamRetryInterval` before trying again. The default is 60 s; 30 s gives
   a moving board more chances before the link is lost.
 
-**How roaming starts.** When the signal drops below the threshold, iwd waits 5 s, then scans:
-first the channels in the access point's neighbor report if it sends one, then channels it has
-seen the network on, then everything. It roams only to an access point with the same SSID and
-security that ranks higher than the current one. A 6 GHz link tends to fail at a stronger
-signal than a 5 GHz one (lower transmit power), so if boards lose the link instead of roaming,
-raising `RoamThreshold5G` (for example to -70) starts that process earlier. Change the values
-against walk-test data.
+**How roaming starts.** When the signal drops below the threshold, iwd waits 5 s (fixed in
+iwd), then scans: first the channels in the access point's neighbor report if it sends one,
+then channels it has seen the network on, then everything. On 6 GHz the first, short scan often
+finds only the current access point, because the driver doesn't listen passively on 6 GHz
+channels while connected; the full scan that follows (3–5 s) finds the others. So a roam
+starts 6–12 s after the signal crosses the threshold. iwd roams only to an access point with
+the same SSID and security that ranks higher than the current one.
 
-**Considered: an `install.sh` option for the thresholds.** It's more code for something that
-rarely changes. Editing `main.conf` and restarting iwd (it reads the file only at startup) is
-enough.
+**After a roam.** The handoff briefly drops the link's carrier, and systemd-networkd answers a
+lost carrier by dropping the address and running DHCP again, so traffic resumes 3–5 s after
+the handoff. `IgnoreCarrierLoss=yes` in the Wi-Fi `.network` file would avoid that, but on
+Ubuntu 22.04 (systemd 249) it takes no time limit: the address then also stays up through a
+real outage, which hides the outage from anything that watches the address. We keep the
+default. Letting iwd configure addresses itself (`EnableNetworkConfiguration=true`) would keep
+the address through roams and still drop it on a disconnect, and is the option to test if the
+gap matters.
+
+**Considered.**
+
+- *An `install.sh` option for the thresholds.* It's more code for something that rarely
+  changes. Editing `main.conf` and restarting iwd (it reads the file only at startup) is enough.
+- *An even earlier threshold (-67).* It would start some roams several seconds sooner, but a
+  board parked between -67 and -70 would then scan every `RoamRetryInterval`, with nowhere
+  better to go.
+- *`RoamRetryInterval=10`.* It would retry sooner after a failed roam, at the cost of three
+  times as much scanning while the signal stays below the threshold. The walk tests didn't
+  show enough benefit.
 
 ---
 
@@ -506,3 +527,28 @@ settings didn't bring Wi-Fi up, ethernet is the way back in.
 **Considered: a separate upgrade script.** It would repeat most of `install.sh` (checks, download,
 driver build with its kernel check) and could drift from it. One script that is safe to run
 again is less to maintain.
+
+---
+
+## D19 — iwd's key cache (PMKSA) is off
+
+**Decision.** `install.sh` sets `[General] DisablePMKSA=true` in `/etc/iwd/main.conf`.
+
+**Why.** iwd 3.12 keeps a cache of keys (PMKSAs), one per access point, so it can reconnect
+without a full SAE exchange. When it builds a Fast Transition, it also looks in that cache for
+the target access point, and if it finds an entry it replaces the key of the current
+connection with it. The FT keys are then derived from the wrong key and the access point
+refuses the reassociation with status 53 (Invalid PMKID); iwd drops the link and connects
+again with a full SAE. It happens on every FT roam back to an access point the board was on
+before its last full reconnect (after a drop, for example): in walk tests, every such roam
+failed. With the cache off, those roams complete like any other, in about 60 ms.
+
+**Cost.** A reconnect after a real drop always does a full SAE (about 0.3 s) instead of
+reusing a cached key (about 60 ms). FT roams don't use the cache, so they are unaffected.
+
+**Until iwd is fixed.** The fix, which stops iwd using the cache for FT roams, is being
+proposed upstream. Once a release ships an iwd with it, `DisablePMKSA` comes out again.
+
+**Considered: clearing the cache after each full reconnect.** It would also avoid the stale
+key, but the cached keys are still valid for reconnecting to those access points, and networks
+that roam without FT use them to roam quickly. The problem is only that FT looks in the cache.
