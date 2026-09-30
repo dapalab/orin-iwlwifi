@@ -347,7 +347,9 @@ the driver, and would change whenever the package is upgraded.
 `build.yml` (the same workflow every push and pull request runs) and publishes the files that
 run built and tested, nothing rebuilt in between. Tags are the date plus a counter
 (`2026.09.28-1`) and are never reused or moved: a fix is a new release. Every file gets a build
-provenance attestation, signed keylessly through GitHub's OIDC identity, and `SHA256SUMS`.
+provenance attestation, signed keylessly through GitHub's OIDC identity, and `SHA256SUMS`. A
+release found to have a problem keeps its files; a note at the top of its release notes
+describes the problem and names the release that fixes it.
 
 **Why.**
 

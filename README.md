@@ -121,7 +121,8 @@ out.
 To **check** it after the reboot:
 
 ```bash
-iw reg get                                   # phy#0 (self-managed) shows "country US"
+iw reg get                                   # phy#0 (self-managed) shows "country US";
+                                             # the "global" country 00 above it is normal
 sudo dmesg | grep 'regulatory country fixed'   # the driver applying it
 ```
 
@@ -148,6 +149,9 @@ hand, is copied to `/var/lib/orin-iwlwifi/replaced-<time>/` first, and the insta
 the driver built for this board, stay in `/var/lib/orin-iwlwifi/<release>/`: to go back,
 `sudo dpkg -i` the older release's `.deb` files there and reboot.
 [D18](docs/DECISIONS.md#d18--installsh-can-run-again) has the details.
+
+If a release turns out to have a problem, its release notes say so at the top and name the
+release that fixes it. Check them before installing or going back to an older release.
 
 **Pre-releases** (tags with a label, e.g. `2026.09.30-1-ftfix1`) are test builds of a single
 change. `--latest` never picks them, and the next release installs over them.
