@@ -1,0 +1,77 @@
+Description: Add a global SendHostname default to main.conf
+ [IPv4].SendHostname can only be set per network, so a system that wants its
+ hostname in every DHCP request has to add it to each profile. Add
+ [Network].SendHostname to main.conf as the default, the same way
+ [Network].EnableIPv6 is the default for [IPv6].Enabled. A profile's
+ [IPv4].SendHostname still takes precedence. See docs/DECISIONS.md D21.
+Author: dapalab <245609868+dapalab@users.noreply.github.com>
+Forwarded: no (to be sent to iwd@lists.linux.dev)
+Last-Update: 2026-09-30
+---
+diff --git a/src/iwd.config.rst b/src/iwd.config.rst
+index b54670de..41a1a1ef 100644
+--- a/src/iwd.config.rst
++++ b/src/iwd.config.rst
+@@ -271,6 +271,13 @@ The group ``[Network]`` contains network configuration related settings.
+ 
+        If not specified, ``300`` is used as default.
+ 
++   * - SendHostname
++     - Values: true, **false**
++
++       Sets the global default that tells **iwd** whether to include the
++       hostname in DHCP requests.  This setting is disabled by default.  This
++       setting can also be overridden on a per-network basis.
++
+ Blacklist
+ ---------
+ 
+diff --git a/src/iwd.network.rst b/src/iwd.network.rst
+index 892c6eb8..7a08a9d8 100644
+--- a/src/iwd.network.rst
++++ b/src/iwd.network.rst
+@@ -407,8 +407,9 @@ network configuration with the static addresses.
+    * - SendHostname
+      - Values: true, **false**
+ 
+-       Configures DHCP to include the hostname in the request. This setting
+-       is disabled by default.
++       Configures DHCP to include the hostname in the request. If not
++       specified, the ``[Network].SendHostname`` setting from main.conf is
++       used, which is disabled by default.
+ 
+ The group ``[IPv6]`` contains settings for Internet Protocol version 6 (IPv6)
+ network configuration.
+diff --git a/src/netconfig.c b/src/netconfig.c
+index 4e62b1dc..332d504c 100644
+--- a/src/netconfig.c
++++ b/src/netconfig.c
+@@ -60,6 +60,7 @@
+  */
+ static uint32_t ROUTE_PRIORITY_OFFSET;
+ static bool ipv6_enabled;
++static bool send_hostname_global;
+ static char *mdns_global;
+ 
+ static void do_debug(const char *str, void *user_data)
+@@ -287,7 +288,7 @@ static bool netconfig_load_gateway(struct netconfig *netconfig,
+ bool netconfig_load_settings(struct netconfig *netconfig,
+ 				const struct l_settings *active_settings)
+ {
+-	bool send_hostname = false;
++	bool send_hostname = send_hostname_global;
+ 	char hostname[HOST_NAME_MAX + 1];
+ 	_auto_(l_free) char *mdns = NULL;
+ 	bool success = true;
+@@ -778,6 +779,11 @@ static int netconfig_init(void)
+ 					&ipv6_enabled))
+ 		ipv6_enabled = true;
+ 
++	if (!l_settings_get_bool(iwd_get_config(), "Network",
++					"SendHostname",
++					&send_hostname_global))
++		send_hostname_global = false;
++
+ 	mdns_global = l_settings_get_string(iwd_get_config(), "Network",
+ 						"MulticastDNS");
+ 

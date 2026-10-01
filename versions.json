@@ -7,6 +7,8 @@
     "                version in place of {v}), checked against its .sign with keys/; the",
     "                tag's commit is recorded for reference. debian = the Debian packaging",
     "                we build with (salsa.debian.org, pinned by commit)",
+    "                iwd.revision (optional) replaces deb.revision for iwd: a",
+    "                pre-release (D20), or an iwd that carries our patches (D21)",
     "  backport      backport-iwlwifi release branch and the commit we build",
     "  firmware      linux-firmware commit and the AX210 files taken from it; release is",
     "                the backport release the firmware drop was made for, for humans",
@@ -37,7 +39,8 @@
       "repo": "https://salsa.debian.org/debian/iwd.git",
       "commit": "965824fc9ccfd8d7586af521ee5c2795c9ffc372",
       "version": "3.12-1"
-    }
+    },
+    "revision": "+orin2"
   },
   "backport": {
     "repo": "https://git.kernel.org/pub/scm/linux/kernel/git/iwlwifi/backport-iwlwifi.git",

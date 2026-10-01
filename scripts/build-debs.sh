@@ -25,7 +25,8 @@ apt-get update -qq
 apt-get install -qq -y --no-install-recommends ca-certificates curl gnupg jq xz-utils dpkg-dev fakeroot > /dev/null
 j() { jq -er "$1" "$TOP/versions.json"; }
 REVISION=$(j .deb.revision)
-# iwd.revision, when set, replaces deb.revision for iwd only (a pre-release, D20).
+# iwd.revision, when set, replaces deb.revision for iwd only: a pre-release (D20), or a
+# release whose iwd carries patches (D21).
 IWD_REVISION=$(jq -r '.iwd.revision // .deb.revision' "$TOP/versions.json")
 MAINTAINER=$(j .deb.maintainer)
 

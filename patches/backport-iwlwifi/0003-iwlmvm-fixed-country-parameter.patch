@@ -1,26 +1,33 @@
-Description: Add an iwlmvm "country" parameter that fixes the regulatory country
+Description: Add an iwlmvm "country" parameter for the regulatory country
  Devices with location-aware regulatory (LAR) get their country from the BIOS
  (ACPI) or, failing that, guess it from nearby beacons. Device-tree platforms
  such as Jetson have no BIOS country, so the firmware starts on the world
  domain, where every 6 GHz channel is disabled, and a 6 GHz-only network
  can't be found until the firmware's guess comes in. Whenever the station is
- not associated the firmware guesses again, every few seconds, and one nearby
- device advertising the wrong country is enough to move it.
+ not associated the firmware guesses again, every few seconds. Right after it
+ starts, one nearby device advertising another country can be enough to move
+ it there.
  .
- With iwlmvm country=XX (ISO 3166 alpha-2), the driver sets that country when
- the firmware starts, in the same way as the SET_COUNTRY vendor command (MCC
- API source), and firmware restarts replay it through the existing
- iwl_mvm_init_fw_regd() path. The firmware applies its own guesses before it
- reports them (MCC_CHUB_UPDATE), so each report is answered by setting the
- fixed country again; only ignoring them left the firmware on its guess, with
- no 6 GHz, until it restarted, while the host still showed the fixed country.
+ With iwlmvm country=XX (ISO 3166 alpha-2), the driver offers that country to
+ the firmware at start and answers each of its guesses with it, both labelled
+ as the firmware's own location updates (wifi source). The firmware takes it
+ only when it matches what it has seen around it. Firmware restarts replay
+ it through the existing iwl_mvm_init_fw_regd() path. A "ZZ" report (no guess,
+ right after the AP is lost) is left alone, and an answer other than the fixed
+ country (a refusal) is not passed to cfg80211. A guess of another country is
+ logged at info level, with whether the firmware took the answer.
+ .
+ The MCC API source (the SET_COUNTRY vendor command, OEM testing) is not used:
+ with it the firmware withdrew the country after one to two hours, was left
+ with no channels and dropped the link, and refused that source for about 15
+ minutes, through driver reloads.
  Without the parameter nothing changes.
 Forwarded: no
-Last-Update: 2026-09-30
+Last-Update: 2026-10-01
 ---
 --- a/drivers/net/wireless/intel/iwlwifi/mvm/mvm.h
 +++ b/drivers/net/wireless/intel/iwlwifi/mvm/mvm.h
-@@ -89,6 +89,7 @@ extern const struct ieee80211_ops iwl_mvm_mld_hw_ops;
+@@ -89,6 +89,7 @@
   */
  struct iwl_mvm_mod_params {
  	int power_scheme;
@@ -38,7 +45,7 @@ Last-Update: 2026-09-30
  #include <linux/firmware.h>
  #include <linux/rtnetlink.h>
  #include "iwl-trans.h"
-@@ -568,6 +569,38 @@ exit:
+@@ -568,6 +569,40 @@
  	return resp_cp;
  }
  
@@ -64,36 +71,48 @@ Last-Update: 2026-09-30
 +	return true;
 +}
 +
-+/* The source the fixed country is set with: as the SET_COUNTRY vendor command */
-+static enum iwl_mcc_source iwl_mvm_fixed_country_src(struct iwl_mvm *mvm)
++/*
++ * Whether the firmware answered with the fixed country. When it refuses a
++ * country it answers with another one (or none) and possibly no channels;
++ * that answer must not reach cfg80211.
++ */
++static bool iwl_mvm_regd_is(const struct ieee80211_regdomain *regd,
++			    const char *mcc)
 +{
-+	if (!iwl_mvm_is_wifi_mcc_supported(mvm))
-+		return MCC_SOURCE_OLD_FW;
-+
-+	return mvm->trans->mac_cfg->device_family > IWL_DEVICE_FAMILY_9000 ?
-+		MCC_SOURCE_MCC_API : MCC_SOURCE_3G_LTE_HOST;
++	return !IS_ERR_OR_NULL(regd) && regd->alpha2[0] == mcc[0] &&
++	       regd->alpha2[1] == mcc[1];
 +}
 +
  int iwl_mvm_init_mcc(struct iwl_mvm *mvm)
  {
  	bool tlv_lar;
-@@ -619,6 +652,24 @@ int iwl_mvm_init_mcc(struct iwl_mvm *mvm)
+@@ -619,6 +654,34 @@
  			return -EIO;
  	}
  
 +	/*
-+	 * Set the fixed country the way the SET_COUNTRY vendor command does.
-+	 * Later firmware starts replay it (iwl_mvm_init_fw_regd() above).
++	 * Offer the fixed country as the firmware's own location updates come
++	 * (wifi source). If it takes it, 6 GHz is there from the start; if not,
++	 * keep the firmware's default and answer its first guess instead (see
++	 * iwl_mvm_rx_chub_update_mcc()). Firmware restarts replay the country
++	 * and source last taken (iwl_mvm_init_fw_regd() above).
 +	 */
 +	if (iwl_mvm_fixed_country(mcc)) {
-+		kfree(regd);
-+		regd = iwl_mvm_get_regdomain(mvm->hw->wiphy, mcc,
-+					     iwl_mvm_fixed_country_src(mvm),
-+					     NULL);
-+		if (IS_ERR_OR_NULL(regd))
-+			return -EIO;
-+		IWL_INFO(mvm, "regulatory country fixed to %s (country module parameter)\n",
-+			 mcc);
++		struct ieee80211_regdomain *fixed_regd;
++
++		fixed_regd = iwl_mvm_get_regdomain(mvm->hw->wiphy, mcc,
++						   MCC_SOURCE_WIFI, NULL);
++		if (iwl_mvm_regd_is(fixed_regd, mcc)) {
++			kfree(regd);
++			regd = fixed_regd;
++			IWL_INFO(mvm, "regulatory country set to %s (country module parameter)\n",
++				 mcc);
++		} else {
++			if (!IS_ERR_OR_NULL(fixed_regd))
++				kfree(fixed_regd);
++			IWL_INFO(mvm, "regulatory country %s (country module parameter) not taken yet; set when the firmware reports a country\n",
++				 mcc);
++		}
 +	} else if (iwlmvm_mod_params.country) {
 +		IWL_WARN(mvm, "ignoring country module parameter '%s': not an ISO 3166 alpha-2 code\n",
 +			 iwlmvm_mod_params.country);
@@ -102,7 +121,7 @@ Last-Update: 2026-09-30
  	retval = regulatory_set_wiphy_regd_sync(mvm->hw->wiphy, regd);
  
  	kfree(regd);
-@@ -631,13 +682,33 @@ void iwl_mvm_rx_chub_update_mcc(struct iwl_mvm *mvm,
+@@ -631,7 +694,7 @@
  	struct iwl_rx_packet *pkt = rxb_addr(rxb);
  	struct iwl_mcc_chub_notif *notif = (void *)pkt->data;
  	enum iwl_mcc_source src;
@@ -111,41 +130,77 @@ Last-Update: 2026-09-30
  	struct ieee80211_regdomain *regd;
  	int wgds_tbl_idx;
  	bool changed = false;
- 
- 	lockdep_assert_held(&mvm->mutex);
+@@ -651,6 +714,53 @@
+ 	mcc[2] = '\0';
+ 	src = notif->source_id;
  
 +	if (iwl_mvm_fixed_country(fixed)) {
++		bool taken;
++
 +		/*
-+		 * By the time this arrives the firmware has already switched
-+		 * to the country it guessed from nearby beacons, whatever the
-+		 * host does with it, and it guesses again every few seconds
-+		 * while not associated. Set the fixed country again, or the
-+		 * firmware keeps its guess (and possibly no 6 GHz) until it
-+		 * restarts, while the host still shows the fixed country.
++		 * Answer the firmware's guess with the fixed country, as its own
++		 * location update (wifi source), never through the MCC API (OEM
++		 * test) source: after a while the firmware withdraws a country
++		 * set that way, has no channels, drops the link, and refuses
++		 * that source for about 15 minutes. "ZZ" (no guess, after the AP
++		 * is lost) is left alone. An answer other than the fixed country
++		 * is not passed on. A guess of another country is rare, so it is
++		 * logged without debug enabled.
 +		 */
-+		IWL_DEBUG_LAR(mvm,
-+			      "Firmware chose mcc 0x%04x (src %d), setting %s again\n",
-+			      le16_to_cpu(notif->mcc), notif->source_id, fixed);
++		if (le16_to_cpu(notif->mcc) == 0x5a5a) {
++			IWL_DEBUG_LAR(mvm,
++				      "Firmware has no country (ZZ, src %d), leaving %s for its next guess\n",
++				      src, fixed);
++			return;
++		}
++		IWL_DEBUG_LAR(mvm, "Firmware chose '%s' (src %d), answering %s\n",
++			      mcc, src, fixed);
 +		regd = iwl_mvm_get_regdomain(mvm->hw->wiphy, fixed,
-+					     iwl_mvm_fixed_country_src(mvm),
-+					     NULL);
-+		if (!IS_ERR_OR_NULL(regd))
-+			kfree(regd);
-+		return;
++					     MCC_SOURCE_WIFI, &changed);
++		taken = iwl_mvm_regd_is(regd, fixed);
++		if (mcc[0] != fixed[0] || mcc[1] != fixed[1])
++			IWL_INFO(mvm,
++				 "firmware guessed %s; answered %s (country module parameter), %s\n",
++				 mcc, fixed, taken ? "taken" : "refused");
++		if (!taken) {
++			IWL_DEBUG_LAR(mvm, "Firmware did not take %s\n", fixed);
++			if (!IS_ERR_OR_NULL(regd))
++				kfree(regd);
++			return;
++		}
++		if (!changed) {
++			/* the host may still have the default from the start */
++			const struct ieee80211_regdomain *r;
++
++			rcu_read_lock();
++			r = rcu_dereference(mvm->hw->wiphy->regd);
++			changed = !r || r->alpha2[0] != fixed[0] ||
++				  r->alpha2[1] != fixed[1];
++			rcu_read_unlock();
++		}
++		goto apply;
 +	}
 +
- 	if (iwl_mvm_is_vif_assoc(mvm) && notif->source_id == MCC_SOURCE_WIFI) {
- 		IWL_DEBUG_LAR(mvm, "Ignore mcc update while associated\n");
+ 	IWL_DEBUG_LAR(mvm,
+ 		      "RX: received chub update mcc cmd (mcc '%s' src %d)\n",
+ 		      mcc, src);
+@@ -658,6 +768,7 @@
+ 	if (IS_ERR_OR_NULL(regd))
  		return;
+ 
++apply:
+ 	if (!changed) {
+ 		IWL_DEBUG_LAR(mvm, "RX: No change in the regulatory data\n");
+ 		goto out;
 --- a/drivers/net/wireless/intel/iwlwifi/mvm/ops.c
 +++ b/drivers/net/wireless/intel/iwlwifi/mvm/ops.c
-@@ -56,6 +56,9 @@ struct iwl_mvm_mod_params iwlmvm_mod_params = {
+@@ -56,6 +56,9 @@
  module_param_named(power_scheme, iwlmvm_mod_params.power_scheme, int, 0444);
  MODULE_PARM_DESC(power_scheme,
  		 "power management scheme: 1-active, 2-balanced, 3-low power, default: 2");
 +module_param_named(country, iwlmvm_mod_params.country, charp, 0444);
 +MODULE_PARM_DESC(country,
-+		 "fixed regulatory country, ISO 3166 alpha-2 (e.g. US); the firmware's location-based country updates are ignored (default: unset)");
++		 "regulatory country the board is in, ISO 3166 alpha-2 (e.g. US); the firmware's location-based guesses are answered with it (default: unset)");
  
  /*
   * module init and exit functions

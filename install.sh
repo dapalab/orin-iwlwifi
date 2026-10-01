@@ -6,15 +6,15 @@
 #
 #   sudo bash install.sh                  install the release this script came from
 #   sudo bash install.sh --latest         install the newest release (never a pre-release)
-#   sudo bash install.sh --release TAG    install a given release (or pre-release, e.g. 2026.09.30-1-ftfix1)
+#   sudo bash install.sh --release TAG    install a given release (or pre-release, e.g. 2026.10.01-1-test1)
 #   sudo bash install.sh --from DIR       install from release files already in DIR (for testing)
 #   sudo bash install.sh --check          only run the checks; change nothing
 #   Add --psk-file FILE to also add a Wi-Fi network: an iwd profile named <SSID>.psk, as iwd
 #   writes it in /var/lib/iwd (see iwd.network(5)). It's copied in as is. Repeat for more networks.
-#   Add --country CC (ISO 3166 code, e.g. US) to fix the Wi-Fi regulatory country. Without it the
+#   Add --country CC (ISO 3166 code, e.g. US) to set the Wi-Fi regulatory country. Without it the
 #   AX210 guesses the country from nearby access points, and until it does, 6 GHz is off. Only
-#   set the country the board is used in. See D16. On a board that already has one, --country none
-#   removes it.
+#   set the country the board is used in: the firmware refuses one it doesn't see around it, and
+#   6 GHz then stays off. See D16. On a board that already has one, --country none removes it.
 #
 # Settings go after sudo (sudo drops variables set before it), e.g. sudo ETH_IFACE=eth0 bash ...
 #   ETH_IFACE      wired interface (default: the first on-board one)
@@ -32,7 +32,7 @@
 #   3. download       release files into /var/lib/orin-iwlwifi/<release>/, checked against SHA256SUMS
 #   4. build_driver   build iwlwifi for the running kernel; stops if the kernel doesn't match
 #   5. install_debs   iwd, libell0, then the driver
-#   6. configure      iwd + systemd-networkd for Wi-Fi and ethernet; NetworkManager masked
+#   6. configure      iwd for Wi-Fi (incl. DHCP), systemd-networkd for ethernet; NetworkManager masked
 #   7. record         write down what went in: /var/lib/orin-iwlwifi/installed
 # Nothing changes how the board is networked until you reboot. There is no undo: to start over,
 # re-image. Why each step is there: docs/DECISIONS.md.
@@ -76,9 +76,17 @@ write() {
   log "wrote $1"
 }
 
-# A setting the board already has: the route metric in a .network file, the fixed country.
+# A setting the board already has: a route metric, the country.
 # Nothing (and success) when the file isn't there yet, as on a freshly flashed board.
 current_metric() { [[ -r $1 ]] || return 0; sed -n '/^RouteMetric=[0-9]*$/{s/^RouteMetric=//p;q}' "$1"; }
+# Wi-Fi's is iwd's RoutePriorityOffset; releases before D21 had it in 25-wlan.network.
+current_wifi_metric() {
+  local m=''
+  [[ ! -r /etc/iwd/main.conf ]] \
+    || m=$(sed -n '/^RoutePriorityOffset=[0-9]*$/{s/^RoutePriorityOffset=//p;q}' /etc/iwd/main.conf)
+  [[ -n $m ]] || m=$(current_metric /etc/systemd/network/25-wlan.network)
+  echo "$m"
+}
 current_country() {
   local f=/etc/modprobe.d/orin-iwlwifi.conf
   [[ -r $f ]] || return 0
@@ -289,11 +297,13 @@ EOF
 }
 
 configure() {
-  write /etc/iwd/main.conf <<'EOF'
+  WIFI_METRIC=${WIFI_METRIC:-$(current_wifi_metric)}
+  write /etc/iwd/main.conf <<EOF
 # Written by orin-iwlwifi install.sh. See iwd.config(5).
 [General]
-# iwd only associates (layer 2); systemd-networkd does DHCP and routes.
-EnableNetworkConfiguration=false
+# iwd sets up wlan0's addresses (DHCP, IPv6) and routes itself, so a roam keeps the address
+# instead of waiting for DHCP again (see D21). systemd-networkd leaves wlan0 alone.
+EnableNetworkConfiguration=true
 AddressRandomization=disabled
 # 1 = use protected management frames when the AP offers them. 0 would make iwd skip 6 GHz.
 ManagementFrameProtection=1
@@ -308,6 +318,15 @@ RoamRetryInterval=30
 # Don't reuse cached keys (PMKSA): iwd 3.12 can apply an out-of-date one to a Fast Transition,
 # and the access point then refuses the roam (see D19).
 DisablePMKSA=true
+
+[Network]
+# DNS servers and the domain name go to systemd-resolved.
+NameResolvingService=systemd
+# The metric of wlan0's routes (iwd adds the interface index, e.g. 604): above ethernet's, so
+# the wired link is preferred when both are up.
+RoutePriorityOffset=${WIFI_METRIC:-600}
+# Send the board's hostname in DHCP requests, on every network (patches/iwd/0001, D21).
+SendHostname=true
 
 [Scan]
 # While disconnected, rescan at least every 10 s (the default backs off to 5 minutes).
@@ -325,7 +344,7 @@ DefaultInterface=*
 PowerSaveDisable=iwlwifi
 EOF
 
-  # Wi-Fi power save on has dropped the link under sustained load: keep it off at every level.
+  # Wi-Fi power save off, at every level: steady latency, no doze and wake-up delays (see D22).
   write /etc/udev/rules.d/80-orin-iwlwifi-powersave-off.rules <<'EOF'
 # Written by orin-iwlwifi install.sh: Wi-Fi power save off.
 ACTION=="add", SUBSYSTEM=="net", ENV{DEVTYPE}=="wlan", RUN+="/usr/sbin/iw dev $name set power_save off"
@@ -334,22 +353,30 @@ EOF
     echo '# Written by orin-iwlwifi install.sh. 1 = active: the AX210 firmware never enters power save.'
     echo 'options iwlmvm power_scheme=1'
     if [[ -n $COUNTRY ]]; then
-      echo '# Regulatory country, fixed with --country (see D16).'
+      echo '# Regulatory country, from --country (see D16).'
       echo "options iwlmvm country=$COUNTRY"
     fi
   } | write /etc/modprobe.d/orin-iwlwifi.conf
-  [[ -z $COUNTRY ]] || log "Wi-Fi regulatory country fixed to $COUNTRY"
+  [[ -z $COUNTRY ]] || log "Wi-Fi regulatory country set to $COUNTRY"
 
-  # systemd-networkd takes over both links at the reboot. The ethernet file must exist before
+  # systemd-networkd takes over ethernet at the reboot. The file must exist before
   # NetworkManager is masked below, or the board comes back with no wired network. See D6.
-  local eth_file=/etc/systemd/network/10-$ETH_IFACE.network wlan_file=/etc/systemd/network/25-wlan.network
+  local eth_file=/etc/systemd/network/10-$ETH_IFACE.network
   ETH_METRIC=${ETH_METRIC:-$(current_metric "$eth_file")}
-  WIFI_METRIC=${WIFI_METRIC:-$(current_metric "$wlan_file")}
   network_file "${eth_file##*/}" "Name=$ETH_IFACE" "${ETH_METRIC:-100}"
-  network_file "${wlan_file##*/}" Type=wlan "${WIFI_METRIC:-600}"
+  # iwd configures Wi-Fi; networkd must not also run DHCP on it (see D21).
+  write /etc/systemd/network/25-wlan.network <<'EOF'
+# Written by orin-iwlwifi install.sh. iwd sets up Wi-Fi addresses and routes (see D21).
+[Match]
+Type=wlan
 
-  # The stock wait-online waits for every link, so a board out of Wi-Fi range would hold up
-  # boot for 2 minutes. Instead: online as soon as there's an IPv4 default route, on any link.
+[Link]
+Unmanaged=yes
+EOF
+
+  # The stock wait-online waits for every link networkd manages, so a board with its ethernet
+  # unplugged would hold up boot for 2 minutes. Instead: online as soon as there's an IPv4
+  # default route, on any link (see D22).
   write /etc/systemd/system/systemd-networkd-wait-online.service.d/orin-iwlwifi.conf <<'EOF'
 # Written by orin-iwlwifi install.sh
 [Service]
@@ -357,7 +384,8 @@ ExecStart=
 ExecStart=/usr/bin/timeout 60 /bin/sh -c 'until ip -4 route show default | grep -q .; do sleep 1; done'
 EOF
 
-  # systemd-networkd hands DNS servers to systemd-resolved; point resolv.conf at its stub.
+  # iwd (Wi-Fi) and systemd-networkd (ethernet) hand DNS servers to systemd-resolved; point
+  # resolv.conf at its stub.
   ln -sfn ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
   log "/etc/resolv.conf -> systemd-resolved"
 
@@ -369,7 +397,7 @@ EOF
     log "added Wi-Fi network '$(profile_ssid "$f")' (/var/lib/iwd/$(basename "$f"))"
   done
 
-  # From the next boot: iwd + systemd-networkd + systemd-resolved, no NetworkManager.
+  # From the next boot: iwd (Wi-Fi) + systemd-networkd (ethernet) + systemd-resolved, no NetworkManager.
   systemctl disable --quiet NetworkManager.service NetworkManager-wait-online.service 2>/dev/null || true
   systemctl mask --quiet NetworkManager.service wpa_supplicant.service
   systemctl enable --quiet iwd.service systemd-networkd.service systemd-networkd.socket \

@@ -28,11 +28,13 @@ Upstream facts were checked on **2026-09-27** unless an entry says otherwise.
 | [D13](#d13--the-driver-ships-its-own-firmware) | The driver ships its own firmware |
 | [D14](#d14--releases-one-workflow-run-dated-tags-attested) | Releases: one workflow run, dated tags, attested |
 | [D15](#d15--roaming-thresholds-are-written-out) | Roaming thresholds are written out |
-| [D16](#d16--an-optional-fixed-regulatory-country) | An optional fixed regulatory country |
+| [D16](#d16--an-optional-regulatory-country) | An optional regulatory country |
 | [D17](#d17--iwd-never-blacklists-an-access-point) | iwd never blacklists an access point |
 | [D18](#d18--installsh-can-run-again) | `install.sh` can run again |
 | [D19](#d19--iwds-key-cache-pmksa-is-off) | iwd's key cache (PMKSA) is off |
 | [D20](#d20--pre-releases-for-testing-changes-on-boards) | Pre-releases for testing changes on boards |
+| [D21](#d21--iwd-configures-wi-fi-addresses) | iwd configures Wi-Fi addresses |
+| [D22](#d22--smaller-settings-and-why) | Smaller settings, and why |
 
 ---
 
@@ -411,6 +413,9 @@ default. Letting iwd configure addresses itself (`EnableNetworkConfiguration=tru
 the address through roams and still drop it on a disconnect, and is the option to test if the
 gap matters.
 
+**Amendment (D21).** iwd now configures Wi-Fi addresses itself, so a roam no longer waits for
+DHCP.
+
 **Considered.**
 
 - *An `install.sh` option for the thresholds.* It's more code for something that rarely
@@ -424,7 +429,7 @@ gap matters.
 
 ---
 
-## D16 — An optional fixed regulatory country
+## D16 — An optional regulatory country
 
 **Decision.** `install.sh --country CC` (an ISO 3166 code such as `US`) adds
 `options iwlmvm country=CC` to `/etc/modprobe.d/orin-iwlwifi.conf`. The parameter comes from
@@ -437,37 +442,68 @@ gap matters.
   tells it the country. A Jetson has a device tree and no BIOS country, so the firmware starts
   on the world domain, where every 6 GHz channel is disabled, not just passive. It then guesses
   the country from the beacons of nearby access points. Until that guess comes in, a 6 GHz-only
-  network can't be found. It usually comes within a couple of minutes, but not always.
-- *The guess isn't sticky.* Whenever the board isn't connected, the firmware guesses again. A
-  single nearby device advertising a different country (small smart-home devices in setup mode
-  often advertise one) can move it, even when many access points around it agree on the right
-  one. If the new country has no 6 GHz, every reconnect to a 6 GHz network fails at once, and
-  iwd reports only "Operation failed".
-- *The usual tools don't reach it.* The driver manages its own regulatory domain, so
-  `iw reg set` has no effect. Intel's `SET_COUNTRY` vendor command does set the country, but the
-  firmware drops it at the next disconnect, so something would have to send it again after
-  every disconnect, and there would be a window each time where 6 GHz is off.
+  network can't be found.
+- *The guess isn't sticky.* Whenever the board isn't connected, the firmware guesses again.
+  Right after it starts, a single nearby device advertising a different country (small
+  smart-home devices in setup mode often advertise one) can be enough for a wrong guess, even
+  when many access points around it agree on the right one. The stock driver confirms whatever
+  the firmware guesses, so a wrong guess sticks until the next one, and if that country has no
+  6 GHz, the board can't find a 6 GHz network meanwhile.
+- *The country can't be forced.* The driver manages its own regulatory domain, so `iw reg set`
+  has no effect. Intel's `SET_COUNTRY` vendor command uses a source meant for OEM testing (the
+  "MCC API"). The firmware takes a country from it at once, but withdraws it after one to two
+  hours: it is left with no channels, drops the link, and refuses that source for about 15
+  minutes, even across driver reloads. A country offered the way the firmware's own location
+  updates come in is taken only when it matches what the firmware has seen around it.
 
-**How the parameter works.** When the firmware starts, the driver sets the country the same way
-the vendor command does. Firmware restarts replay it through the driver's existing path. The
-firmware applies a guess before it reports it, so ignoring its country updates is not enough:
-the firmware would stay on its guess while the kernel still showed the fixed country. Instead,
-the driver answers each update by setting the fixed country again. An invalid value is logged
-and ignored.
+**How the parameter works.** It tells the driver which country the board is in, and the driver
+steers the firmware's guesses toward it, never through the MCC API:
+
+- When the firmware starts, the driver offers the country as a location update. The firmware
+  usually refuses it until it has seen nearby beacons, so the board starts on the world domain.
+- When the firmware guesses the set country, the driver confirms it, and the kernel's
+  regulatory domain follows. 6 GHz comes on.
+- When it guesses another country, the driver answers with the set country instead of
+  confirming the guess. The firmware refuses that, and the refusal is not passed on to the
+  kernel. With the wrong guess unconfirmed, the firmware keeps guessing. Next to a device
+  advertising another country, the right guess came a few seconds later, and the board
+  connected as fast as without the wrong guess.
+- When it reports no country ("ZZ", while not connected), the driver leaves the kernel's
+  country as it is.
+
+Firmware restarts replay the last country the firmware took. An invalid value is logged and
+ignored.
+
+**What it can't do.** The firmware has the last word: it only uses a country it has seen in
+nearby beacons. If a device advertising another country dominates where the board sits, 6 GHz
+can stay off until the firmware sees the right one. A network that's also on 5 GHz (the same
+SSID on both bands) keeps the board connected meanwhile, and setting up or removing the device
+fixes the cause.
+
+A country the firmware doesn't see around the board is never taken. With the wrong country
+set (say `CA` on a board in the US), the firmware refuses every answer, the driver passes none
+of them on, and the board stays on the world domain with 6 GHz off. Without `--country` it
+would have taken the firmware's own guess.
 
 **Why it's opt-in.** Which country's rules a radio follows is a legal matter: set only the
 country the board is used in. A board that travels, or one where the firmware's guess is good
 enough, is better off without it.
 
-**Checking and changing it.** `iw reg get` shows the country under `phy#0 (self-managed)`, and
-`dmesg | grep 'regulatory country fixed'` shows the driver applying it. To change or remove it
-on an installed board, edit `/etc/modprobe.d/orin-iwlwifi.conf` and reboot. The parameter
-needs a driver built with patch 0003. An older driver logs `unknown parameter 'country'` and
-carries on without it.
+**Checking and changing it.** `iw reg get` shows the country under `phy#0 (self-managed)`.
+`dmesg | grep 'regulatory country'` shows the driver at start: `set to US` if the firmware took
+it, or `not taken yet` until the firmware reports a country. A guess of another country is
+logged too, without any debug setting, e.g.
+`firmware guessed CN; answered US (country module parameter), refused`. An occasional one is
+the firmware's guess being corrected; a steady stream means the country set isn't the one the
+firmware sees around the board (see above). To change or remove it on an
+installed board, edit `/etc/modprobe.d/orin-iwlwifi.conf` and reboot. The parameter needs a
+driver built with patch 0003. An older driver logs `unknown parameter 'country'` and carries on
+without it.
 
-**Considered: a userspace service** that sends the vendor command at boot and again whenever
-the country changes. No driver change, but it races the firmware after every disconnect, and
-it's one more service to run. The parameter is set before iwd starts and holds from then on.
+**Considered: setting the country with the vendor command** (MCC API), at start and again after
+every guess, from the driver or from a userspace service. It forces the country at once, but
+the firmware withdraws it after one to two hours, as described above. Releases up to
+2026.09.30-2 did this from the driver.
 
 ---
 
@@ -510,8 +546,9 @@ without a re-image. It needs the same things as a first install, including ether
   the old one.
 - *The country.* Without `--country`, the country in `/etc/modprobe.d/orin-iwlwifi.conf` is kept.
   `--country CC` changes it, and `--country none` removes it.
-- *Route metrics.* Without `ETH_METRIC` or `WIFI_METRIC`, the values in the existing `.network`
-  files are kept.
+- *Route metrics.* Without `ETH_METRIC` or `WIFI_METRIC`, the board's current values are kept:
+  ethernet's from its `.network` file, Wi-Fi's from `RoutePriorityOffset` in
+  `/etc/iwd/main.conf` (or, on a board upgraded from before D21, from `25-wlan.network`).
 
 **What it replaces.** Every other file `install.sh` writes is written again from the release,
 so a new release's settings take effect. A file whose contents would change, whether written by an
@@ -552,7 +589,7 @@ failed. With the cache off, those roams complete like any other, in about 60 ms.
 reusing a cached key (about 60 ms). FT roams don't use the cache, so they are unaffected.
 
 **Until iwd is fixed.** The fix, which stops iwd using the cache for FT roams, is being
-proposed upstream and tested in a pre-release (D20). Once a release ships an iwd with it,
+prepared for upstream and tested in a pre-release (D20). Once a release ships an iwd with it,
 `DisablePMKSA` comes out again.
 
 **Considered: clearing the cache after each full reconnect.** It would also avoid the stale
@@ -566,7 +603,7 @@ that roam without FT use them to roam quickly. The problem is only that FT looks
 **Decision.** A change that needs testing on real boards before it goes into a release, such as
 a patch to iwd, can be published as a pre-release from its own branch: Actions > release > Run
 workflow, on that branch, with *Pre-release* ticked and a tag made of a release tag plus a
-label, for example `2026.09.30-1-ftfix1`.
+label, for example `2026.10.01-1-test1`.
 
 **How it differs from a release.**
 
@@ -574,13 +611,15 @@ label, for example `2026.09.30-1-ftfix1`.
   README's download link skip it. A board gets it only from its own `install.sh` or with
   `--release <tag>`.
 - *Its packages sort below the release.* A pre-release can give iwd its own version suffix
-  (`iwd.revision` in `versions.json`, e.g. `+orin0.ftfix2`), and patches in `patches/iwd/`
+  (`iwd.revision` in `versions.json`, e.g. `+orin0.test1`), and patches in `patches/iwd/`
   are added to Debian's quilt series, so the source package carries them. `orin0` sorts below
   the release's `orin1`: installing the pre-release over a release is a downgrade `dpkg -i`
-  accepts, and the next release installs over it as an ordinary upgrade. The version has no
-  `~` (Debian's usual "sorts lower" mark): GitHub turns a `~` in an uploaded file name into a
-  `.`, and `install.sh` then can't find the files `SHA256SUMS` lists. The release build
-  refuses file names GitHub would change.
+  accepts, and the next release installs over it as an ordinary upgrade. (A release that
+  changes iwd's patches raises its own `iwd.revision`, e.g. `+orin2`; a pre-release then uses
+  the number below it, e.g. `+orin1.<label>`.) The version has no `~` (Debian's usual "sorts
+  lower" mark): GitHub turns a `~` in an uploaded file name into a `.`, and `install.sh` then
+  can't find the files `SHA256SUMS` lists. The release build refuses file names GitHub would
+  change.
 - *Same build and checks.* It goes through the same build workflow, checksums and
   attestations as a release.
 
@@ -588,3 +627,81 @@ label, for example `2026.09.30-1-ftfix1`.
 release is deleted, so dated numbers are kept for releases.
 
 **Going back.** Run a regular release's `install.sh` again (D18).
+
+---
+
+## D21 — iwd configures Wi-Fi addresses
+
+**Decision.** iwd sets up wlan0's addresses, routes and DNS itself
+(`EnableNetworkConfiguration=true` in `/etc/iwd/main.conf`). systemd-networkd manages only
+ethernet; `25-wlan.network` tells it to leave Wi-Fi links alone (`Unmanaged=yes`).
+
+**Why.** iwd knows the difference between a roam and a disconnect; systemd-networkd only sees
+the link's carrier. A roam briefly drops the carrier, and networkd answers that by dropping the
+address and running DHCP again, which leaves the board without an address for 3–5 s after every
+roam (D15). iwd keeps the address, routes and DNS through a roam and only refreshes the
+gateway's entry in the ARP cache, so traffic resumes as soon as the handoff completes. On a real
+disconnect it removes the address, as networkd did, so anything that watches the address still
+sees the outage.
+
+**What stays the same.**
+
+- *Route metric.* `RoutePriorityOffset` in `main.conf` sets the metric of wlan0's routes: 600 unless
+  `WIFI_METRIC` says otherwise, plus wlan0's interface index (ell adds it, so `ip route` shows
+  e.g. 604), so ethernet (100) is still preferred when both are up. A board upgraded from an
+  earlier release keeps the `RouteMetric` it had in `25-wlan.network`.
+- *DNS.* DNS servers and the domain name go to systemd-resolved (`NameResolvingService=systemd`),
+  as networkd's did (but see the search list below).
+- *IPv6.* iwd accepts router advertisements and runs DHCPv6 (iwd's default `EnableIPv6=true`),
+  and turns off the kernel's own handling of router advertisements on the link, as networkd did.
+- *Hostname.* networkd sent the board's hostname in its DHCP requests. iwd 3.12 does that only
+  for networks whose profile has `[IPv4] SendHostname=true`, and profiles are copied in
+  unchanged (D7). `0001-netconfig-global-SendHostname-default.patch` adds a `[Network]
+  SendHostname` default to `main.conf`, the same way `[Network] EnableIPv6` is the default for
+  `[IPv6] Enabled`, and `install.sh` turns it on. A profile's own setting still wins. The patch
+  will be proposed upstream.
+
+**What changes.** iwd's DHCP client (from ell) sends no client identifier, where networkd sent
+one made from the MAC address. A DHCP server that keys its leases on the client identifier can
+hand the board a new address the first time; reservations made by MAC address are unaffected.
+It also reads only the DHCP domain name (option 15), not the domain search list (option 119), so
+short host names are tried under that one domain only; full names and addresses work as before.
+Accepted: it's minor, and adding it would mean patching ell as well.
+`networkctl` shows wlan0 as `unmanaged`; `iwctl station wlan0 show` and `ip addr` show its
+address.
+
+**Considered: `IgnoreCarrierLoss=yes` in `25-wlan.network`.** It keeps networkd from reacting to
+a roam's carrier drop, but on Ubuntu 22.04 (systemd 249) it takes no time limit, so the address
+would also stay up through a real outage (D15).
+
+---
+
+## D22 — Smaller settings, and why
+
+**Decision.** `install.sh` and the driver package also set the following. None of them needs an
+entry of its own, but each one is there for a reason.
+
+- *Wi-Fi power save off, at every level.* iwlmvm `power_scheme=1` (the firmware stays active),
+  a udev rule running `iw dev <wlan> set power_save off` when the interface appears, and iwd's
+  `PowerSaveDisable=iwlwifi` quirk, so iwd doesn't turn it back on. With power save on, the card
+  dozes between beacons and frames for it wait for the next wake-up, which adds latency and
+  jitter. A board on mains power gains little from it. Three places, because each layer can
+  turn it on by itself.
+- *`ManagementFrameProtection=1`.* Use protected management frames whenever the access point
+  offers them. It's iwd's default, written out because `0` makes iwd skip 6 GHz networks, which
+  require them.
+- *`AddressRandomization=disabled`.* The board always uses its own MAC address, so DHCP
+  reservations and access point logs stay tied to it. Also iwd's default, written out.
+- *`MaximumPeriodicScanInterval=10`.* While disconnected, iwd scans every 10 s at first and then
+  backs off to every 5 minutes by default. Capping it at 10 s means a board finds its network
+  within seconds when it comes back in range, at the cost of more scanning while it's out of
+  range.
+- *`DefaultInterface=*`.* iwd normally deletes the kernel's Wi-Fi interface and creates its own.
+  This quirk keeps the kernel's `wlan0`, so its name and the udev rule above apply as usual.
+- *A faster `systemd-networkd-wait-online`.* The stock service waits until every link networkd
+  manages is configured, for up to 2 minutes, so a board with its ethernet unplugged would hold
+  up boot. The override is done as soon as there's an IPv4 default route on any link, Wi-Fi
+  included, and gives up after 60 s.
+- *`rtl8822ce` blacklisted by the driver package.* Some Jetson developer kits ship with a
+  Realtek Wi-Fi card, and NVIDIA's images carry its driver. Built against the kernel's own
+  cfg80211, it would load against the backported one and fail.
