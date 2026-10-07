@@ -12,6 +12,10 @@ REPO=${2:-dapalab/orin-iwlwifi}
 j() { jq -er "$1" "$TOP/versions.json"; }
 REV=$(j .deb.revision)
 IWD_REV=$(jq -r '.iwd.revision // .deb.revision' "$TOP/versions.json")
+BP_REV=$(jq -r '.backport.revision // .deb.revision' "$TOP/versions.json")
+# The driver package's version, as build-driver.sh makes it.
+BP_BRANCH=$(j .backport.branch) BP_DATE=$(j .backport.date) BP_SHA=$(j .backport.commit)
+DRIVER_VERSION=${BP_BRANCH#release/core}+git${BP_DATE//-/}.${BP_SHA:0:8}-1$BP_REV
 HEADERS=$(jq -r '[.l4t.headers[].version | sub("^.*-tegra-"; "") | sub("-[0-9]+$"; "")] | join(", ")' \
   "$TOP/versions.json")
 
@@ -31,6 +35,12 @@ if [[ -e ${PATCHES[0]} ]]; then
   done
   echo
 fi
+echo "The driver carries these patches on top of backport-iwlwifi:"
+echo
+for p in "$TOP"/patches/backport-iwlwifi/*.patch; do
+  echo "- \`${p##*/}\`: $(sed -n 's/^Description: //p' "$p" | head -1)"
+done
+echo
 
 cat <<EOF
 ## Install
@@ -63,7 +73,7 @@ backs up any file it replaces to \`/var/lib/orin-iwlwifi/replaced-<time>/\`.
 |---|---|---|
 | iwd | $(j .iwd.tag) (deb \`$(j .iwd.debian.version)$IWD_REV\`) | kernel.org release tarball, signature checked; Debian packaging \`$(j .iwd.debian.commit | cut -c1-12)\` |
 | ell | $(j .ell.tag) (deb \`$(j .ell.debian.version)$REV\`) | kernel.org release tarball, signature checked; Debian packaging \`$(j .ell.debian.commit | cut -c1-12)\` |
-| iwlwifi backport | \`$(j .backport.branch)\` at \`$(j .backport.commit | cut -c1-12)\` ($(j .backport.date)) | built on the board by \`install.sh\` |
+| iwlwifi backport | \`$(j .backport.branch)\` at \`$(j .backport.commit | cut -c1-12)\` ($(j .backport.date)) (deb \`$DRIVER_VERSION\`) | built on the board by \`install.sh\` |
 | AX210 firmware | $(j .firmware.release): $(jq -r '[.firmware.files[] | sub("^.*/"; "")] | join(", ")' "$TOP/versions.json") | linux-firmware \`$(j .firmware.commit | cut -c1-12)\` |
 
 The driver was test-compiled in CI against NVIDIA's kernel headers for Jetson Linux $HEADERS.

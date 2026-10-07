@@ -315,9 +315,9 @@ RoamThreshold=-70
 RoamThreshold5G=-70
 # Seconds before trying again after a failed roam, or one that landed on a weak AP (default 60).
 RoamRetryInterval=30
-# Don't reuse cached keys (PMKSA): iwd 3.12 can apply an out-of-date one to a Fast Transition,
-# and the access point then refuses the roam (see D19).
-DisablePMKSA=true
+# Cached keys (PMKSA) are on: patches/iwd/0003 stops iwd 3.12 applying an out-of-date one to a
+# Fast Transition (see D19). To turn the cache off, uncomment this and restart iwd.
+#DisablePMKSA=true
 
 [Network]
 # DNS servers and the domain name go to systemd-resolved.

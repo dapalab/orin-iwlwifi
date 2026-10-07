@@ -21,7 +21,7 @@ Upstream facts were checked on **2026-09-27** unless an entry says otherwise.
 | [D6](#d6--installed-over-ethernet) | Installed over ethernet |
 | [D7](#d7--network-setup-is-optional) | Network setup is optional |
 | [D8](#d8--new-backport-branches-are-reviewed-never-automerged) | New backport branches are reviewed, never automerged |
-| [D9](#d9--three-patches-to-backport-iwlwifi) | Three patches to backport-iwlwifi |
+| [D9](#d9--four-patches-to-backport-iwlwifi) | Four patches to backport-iwlwifi |
 | [D10](#d10--versionsjson-is-the-single-source-of-truth) | `versions.json` is the single source of truth |
 | [D11](#d11--licence-gpl-20-only) | Licence: GPL-2.0-only |
 | [D12](#d12--names-orin-iwlwifi-everywhere) | Names: `orin-iwlwifi` everywhere |
@@ -31,10 +31,11 @@ Upstream facts were checked on **2026-09-27** unless an entry says otherwise.
 | [D16](#d16--an-optional-regulatory-country) | An optional regulatory country |
 | [D17](#d17--iwd-never-blacklists-an-access-point) | iwd never blacklists an access point |
 | [D18](#d18--installsh-can-run-again) | `install.sh` can run again |
-| [D19](#d19--iwds-key-cache-pmksa-is-off) | iwd's key cache (PMKSA) is off |
+| [D19](#d19--iwds-key-cache-pmksa-and-fast-transition) | iwd's key cache (PMKSA) and Fast Transition |
 | [D20](#d20--pre-releases-for-testing-changes-on-boards) | Pre-releases for testing changes on boards |
 | [D21](#d21--iwd-configures-wi-fi-addresses) | iwd configures Wi-Fi addresses |
 | [D22](#d22--smaller-settings-and-why) | Smaller settings, and why |
+| [D23](#d23--fast-transition-between-access-points-on-one-channel) | Fast Transition between access points on one channel |
 
 ---
 
@@ -236,7 +237,7 @@ commit date, not by name.
 
 ---
 
-## D9 — Three patches to backport-iwlwifi
+## D9 — Four patches to backport-iwlwifi
 
 **Decision.** Keep our changes to the backport driver as small patches in
 `patches/backport-iwlwifi/`, applied at build time. Each has a header saying what it changes and
@@ -254,6 +255,14 @@ why.
 - `0003-iwlmvm-fixed-country-parameter.patch`: adds the `iwlmvm country=` parameter that
   `install.sh --country` sets. Without it, a board with no BIOS country can come up with 6 GHz
   off. See D16.
+- `0004-mac80211-restart-rx-ba-on-repeated-addba.patch`: when an access point asks again to set
+  up a Block Ack session the board already has, with the same dialog token, mac80211 answers
+  "declined" whenever the driver reorders frames itself, as iwlwifi does on the AX210. An
+  access point that keeps asking with the same token then never gets its session, and some
+  stop answering the board's own requests too: its uplink goes out without aggregation, and
+  the firmware holds the queue for about 200 ms each time it asks, every few seconds. The
+  patch restarts the session instead, as for a request with a new token. It is a mac80211 fix,
+  carried here because the backport ships its own mac80211.
 
 **Considered: carrying a forked backport tree.** A few small patches are easier to review, and
 easy to re-check against every new backport commit: if one stops applying, CI fails.
@@ -572,9 +581,11 @@ again is less to maintain.
 
 ---
 
-## D19 — iwd's key cache (PMKSA) is off
+## D19 — iwd's key cache (PMKSA) and Fast Transition
 
-**Decision.** `install.sh` sets `[General] DisablePMKSA=true` in `/etc/iwd/main.conf`.
+**Decision.** iwd carries `patches/iwd/0003`, which stops it using its key cache for Fast
+Transition roams, and the cache stays on. `install.sh` writes `DisablePMKSA=true` into
+`/etc/iwd/main.conf` commented out; releases up to 2026.10.01-1 set it, with the cache off.
 
 **Why.** iwd 3.12 keeps a cache of keys (PMKSAs), one per access point, so it can reconnect
 without a full SAE exchange. When it builds a Fast Transition, it also looks in that cache for
@@ -583,14 +594,15 @@ connection with it. The FT keys are then derived from the wrong key and the acce
 refuses the reassociation with status 53 (Invalid PMKID); iwd drops the link and connects
 again with a full SAE. It happens on every FT roam back to an access point the board was on
 before its last full reconnect (after a drop, for example): in walk tests, every such roam
-failed. With the cache off, those roams complete like any other, in about 60 ms.
+failed. With the patch, iwd only looks in the cache for a new connection, and in walk tests
+those roams completed by FT like any other.
 
-**Cost.** A reconnect after a real drop always does a full SAE (about 0.3 s) instead of
-reusing a cached key (about 60 ms). FT roams don't use the cache, so they are unaffected.
+**What the cache gives.** A reconnect after a real drop can reuse a cached key (about 60 ms)
+instead of a full SAE (about 0.3 s). FT roams don't use it either way.
 
-**Until iwd is fixed.** The fix, which stops iwd using the cache for FT roams, is being
-prepared for upstream and tested in a pre-release (D20). Once a release ships an iwd with it,
-`DisablePMKSA` comes out again.
+**Turning it off.** Uncomment `DisablePMKSA=true` in `/etc/iwd/main.conf` and restart iwd.
+Roams are unaffected; reconnects after a drop then always do a full SAE. The patch is being
+prepared for upstream.
 
 **Considered: clearing the cache after each full reconnect.** It would also avoid the stale
 key, but the cached keys are still valid for reconnecting to those access points, and networks
@@ -612,14 +624,16 @@ label, for example `2026.10.01-1-test1`.
   `--release <tag>`.
 - *Its packages sort below the release.* A pre-release can give iwd its own version suffix
   (`iwd.revision` in `versions.json`, e.g. `+orin0.test1`), and patches in `patches/iwd/`
-  are added to Debian's quilt series, so the source package carries them. `orin0` sorts below
-  the release's `orin1`: installing the pre-release over a release is a downgrade `dpkg -i`
-  accepts, and the next release installs over it as an ordinary upgrade. (A release that
-  changes iwd's patches raises its own `iwd.revision`, e.g. `+orin2`; a pre-release then uses
-  the number below it, e.g. `+orin1.<label>`.) The version has no `~` (Debian's usual "sorts
-  lower" mark): GitHub turns a `~` in an uploaded file name into a `.`, and `install.sh` then
-  can't find the files `SHA256SUMS` lists. The release build refuses file names GitHub would
-  change.
+  are added to Debian's quilt series, so the source package carries them. The driver package
+  can have its own in the same way (`backport.revision`), for a pre-release that changes
+  `patches/backport-iwlwifi/`. `orin0` sorts below the release's `orin1`: installing the
+  pre-release over a release is a downgrade `dpkg -i` accepts, and the next release installs
+  over it as an ordinary upgrade. (A release that changes iwd's patches raises its own
+  `iwd.revision`, e.g. `+orin2`, and one that changes the driver's raises `backport.revision`;
+  a pre-release then uses the number below it, e.g. `+orin1.<label>`.) The version has no `~`
+  (Debian's usual "sorts lower" mark): GitHub turns a `~` in an uploaded file name into a `.`,
+  and `install.sh` then can't find the files `SHA256SUMS` lists. The release build refuses file
+  names GitHub would change.
 - *Same build and checks.* It goes through the same build workflow, checksums and
   attestations as a release.
 
@@ -705,3 +719,23 @@ entry of its own, but each one is there for a reason.
 - *`rtl8822ce` blacklisted by the driver package.* Some Jetson developer kits ship with a
   Realtek Wi-Fi card, and NVIDIA's images carry its driver. Built against the kernel's own
   cfg80211, it would load against the backported one and fail.
+
+---
+
+## D23 — Fast Transition between access points on one channel
+
+**Decision.** iwd carries `patches/iwd/0002`, which gives the FT Authenticate frame a wait time
+of 100 ms.
+
+**Why.** For a Fast Transition, iwd sends an Authenticate frame to the target access point
+through the current connection, marked as allowed off-channel but with no wait time. mac80211
+then uses its off-channel path only when the target is on another channel. When it's on the
+same channel, the frame goes out as an ordinary frame from a station that has no entry for
+that access point, and iwlwifi drops it. The access point never answers, and the roam ends in
+"authentication timeout". Every FT roam between two access points sharing a channel failed this
+way, which matters on 6 GHz networks, where neighbouring access points often share one. With a
+wait time, mac80211 takes the off-channel path for any access point other than the current one,
+and those roams complete like the rest, with the link down for about 100 ms.
+
+**Considered: cancelling the wait once the reply arrives.** It didn't shorten the roam: the
+remaining time is the driver and firmware switching access points.

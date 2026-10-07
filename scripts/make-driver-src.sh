@@ -24,7 +24,7 @@ BP_SHA=$(j .backport.commit)    BP_DATE=$(j .backport.date)
 FW_URL=$(j .firmware.repo)      FW_SHA=$(j .firmware.commit)
 FW_RELEASE=$(j .firmware.release) FW_LICENCE=$(j .firmware.licence)
 mapfile -t FW_PATHS < <(j '.firmware.files[]')
-DEB_REVISION=$(j .deb.revision) MAINTAINER=$(j .deb.maintainer)
+DEB_REVISION=$(j '.backport.revision // .deb.revision') MAINTAINER=$(j .deb.maintainer)
 
 STAGE=$TOP/build/driver-src
 rm -rf "$STAGE"

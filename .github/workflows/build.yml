@@ -57,6 +57,7 @@ jobs:
             and (.firmware.files | length > 0)
             and (.deb.revision | test("^\\+[a-z0-9.]+$"))
             and ((.iwd.revision // .deb.revision) | test("^\\+[a-z0-9.]+$"))
+            and ((.backport.revision // .deb.revision) | test("^\\+[a-z0-9.]+$"))
           ' versions.json
 
   # ---------------------------------------------------------------------------

@@ -1,0 +1,32 @@
+Description: Don't decline a repeated ADDBA request when the driver reorders frames
+ When a peer sends an ADDBA Request with the dialog token of a receive Block
+ Ack session that is already set up, mac80211 treats it as an update and
+ answers success only if the stored session has the same timeout. Drivers
+ that do their own reordering (SUPPORTS_REORDERING_BUFFER, e.g. iwlmvm on
+ the AX210) have no tid_rx for that check, so the answer is always "request
+ declined". An AP that lost its side of the session and asks again with the
+ same token is then refused every time; some APs keep retrying with the
+ same token indefinitely and leave the session (and its aggregation) down.
+ On those drivers, restart the session as for a request with a new token.
+ See docs/DECISIONS.md D9.
+Forwarded: no (to be sent to linux-wireless@vger.kernel.org)
+Last-Update: 2026-10-06
+---
+--- a/net/mac80211/agg-rx.c
++++ b/net/mac80211/agg-rx.c
+@@ -370,7 +370,14 @@
+ 	       buf_size, sta->sta.addr);
+ 
+ 	if (test_bit(tid, sta->ampdu_mlme.agg_session_valid)) {
+-		if (sta->ampdu_mlme.tid_rx_token[tid] == dialog_token) {
++		/*
++		 * With a driver reorder buffer there is no tid_rx to compare
++		 * the timeout against, so a repeated request would always be
++		 * declined. Restart the session below instead, as for a new
++		 * dialog token.
++		 */
++		if (sta->ampdu_mlme.tid_rx_token[tid] == dialog_token &&
++		    !ieee80211_hw_check(&local->hw, SUPPORTS_REORDERING_BUFFER)) {
+ 			struct tid_ampdu_rx *tid_rx;
+ 
+ 			ht_dbg_ratelimited(sta->sdata,

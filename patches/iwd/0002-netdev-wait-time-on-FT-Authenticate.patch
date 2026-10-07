@@ -1,0 +1,43 @@
+Description: Give FT Authenticate frames a wait time, so FT works on one channel
+ netdev_tx_ft_frame() sends the FT Authenticate frame with
+ NL80211_ATTR_OFFCHANNEL_TX_OK but no wait time (NL80211_ATTR_DURATION). For a
+ station interface, mac80211 then takes its off-channel path only when the
+ target AP is on another channel. For a target AP on the current channel the
+ frame goes out as an ordinary frame from a station that has no entry for that
+ AP, and iwlwifi drops it: the AP never answers and the roam ends in
+ "authentication timeout". Every FT roam between two APs on the same channel
+ fails this way; roams to an AP on another channel are unaffected.
+ .
+ With a wait time, mac80211 sends a frame for a BSS other than the current AP
+ through its off-channel path in both cases. 100 ms is ample for the AP's
+ reply, which normally comes within a few tens of milliseconds. See
+ docs/DECISIONS.md D23.
+Author: dapalab <245609868+dapalab@users.noreply.github.com>
+Forwarded: no (to be sent to iwd@lists.linux.dev)
+Last-Update: 2026-10-06
+---
+diff --git a/src/netdev.c b/src/netdev.c
+index e639a1f..384c4bf 100644
+--- a/src/netdev.c
++++ b/src/netdev.c
+@@ -4591,6 +4591,20 @@ static int netdev_tx_ft_frame(uint32_t ifindex, uint16_t frame_type,
+ 	 */
+ 	l_genl_msg_append_attr(msg, NL80211_ATTR_OFFCHANNEL_TX_OK, 0, NULL);
+ 
++	/*
++	 * mac80211 only sends a frame to a BSS other than the current AP
++	 * offchannel when a wait time is given. Without one, a frame for a
++	 * target AP on the current channel goes out as a normal frame on a
++	 * station that has no entry for that AP, and some drivers (iwlwifi)
++	 * drop it.
++	 */
++	if (frame_type == 0x00b0) {
++		uint32_t duration = 100;
++
++		l_genl_msg_append_attr(msg, NL80211_ATTR_DURATION, 4,
++					&duration);
++	}
++
+ 	if (!l_genl_family_send(nl80211, msg, netdev_ft_frame_cb,
+ 				netdev, NULL)) {
+ 		l_genl_msg_unref(msg);

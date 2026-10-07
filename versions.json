@@ -9,7 +9,9 @@
     "                we build with (salsa.debian.org, pinned by commit)",
     "                iwd.revision (optional) replaces deb.revision for iwd: a",
     "                pre-release (D20), or an iwd that carries our patches (D21)",
-    "  backport      backport-iwlwifi release branch and the commit we build",
+    "  backport      backport-iwlwifi release branch and the commit we build;",
+    "                backport.revision (optional) replaces deb.revision for the driver",
+    "                package: a pre-release (D20), or a driver whose patches changed (D9)",
     "  firmware      linux-firmware commit and the AX210 files taken from it; release is",
     "                the backport release the firmware drop was made for, for humans",
     "  l4t           the Jetson Linux line we support. headers lists NVIDIA's",
@@ -40,13 +42,14 @@
       "commit": "965824fc9ccfd8d7586af521ee5c2795c9ffc372",
       "version": "3.12-1"
     },
-    "revision": "+orin2"
+    "revision": "+orin3"
   },
   "backport": {
     "repo": "https://git.kernel.org/pub/scm/linux/kernel/git/iwlwifi/backport-iwlwifi.git",
     "branch": "release/core24.70",
     "commit": "8993345680c966b6906701f2509f43202d5a7e68",
-    "date": "2026-09-01"
+    "date": "2026-09-01",
+    "revision": "+orin2"
   },
   "firmware": {
     "repo": "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git",

@@ -1,0 +1,67 @@
+Description: Don't use a cached PMKSA for Fast Transition roams
+ To rebuild the RSNE for a Fast Transition, station_fast_transition() calls
+ station_build_handshake_rsn(), which looks up the PMKSA cache for the target
+ BSS just as it does for a new connection. If an entry exists from an earlier
+ association to that BSS, handshake_state_set_pmksa() replaces the PMK of the
+ current association with the cached one, and handshake_state_derive_ptk()
+ derives PMK-R0/PMK-R1 from it. The PMKR1Name in the Reassociation Request
+ then doesn't match the target AP's, which rejects it with status 53 (Invalid
+ PMKID), and iwd falls back to a full SAE connection.
+ .
+ This happens on every FT roam back to an AP visited before the last full
+ (non-FT) association, e.g. after a disconnect. Only consult the PMKSA cache
+ when building a new handshake. See docs/DECISIONS.md D19 and D20.
+Author: dapalab <245609868+dapalab@users.noreply.github.com>
+Forwarded: no (to be sent to iwd@lists.linux.dev)
+Last-Update: 2026-09-30
+---
+diff --git a/src/station.c b/src/station.c
+index 8fcf8c70..4704425b 100644
+--- a/src/station.c
++++ b/src/station.c
+@@ -1206,7 +1206,8 @@ static void station_handshake_event(struct handshake_state *hs,
+ static int station_build_handshake_rsn(struct handshake_state *hs,
+ 					struct wiphy *wiphy,
+ 					struct network *network,
+-					struct scan_bss *bss)
++					struct scan_bss *bss,
++					bool use_pmksa)
+ {
+ 	struct netdev *netdev = netdev_find(hs->ifindex);
+ 	const struct l_settings *settings = iwd_get_config();
+@@ -1353,7 +1354,7 @@ build_ie:
+ 			IE_CIPHER_IS_GCMP_CCMP(info.pairwise_ciphers))
+ 		info.extended_key_id = true;
+ 
+-	if (IE_AKM_IS_SAE(info.akm_suites) && !pmksa_disabled) {
++	if (use_pmksa && IE_AKM_IS_SAE(info.akm_suites) && !pmksa_disabled) {
+ 		pmksa = pmksa_cache_get(netdev_get_address(netdev), bss->addr,
+ 					bss->ssid, bss->ssid_len,
+ 					info.akm_suites);
+@@ -1437,7 +1438,7 @@ static struct handshake_state *station_handshake_setup(struct station *station,
+ 
+ 	handshake_state_set_event_func(hs, station_handshake_event, station);
+ 
+-	if (station_build_handshake_rsn(hs, wiphy, network, bss) < 0)
++	if (station_build_handshake_rsn(hs, wiphy, network, bss, true) < 0)
+ 		goto not_supported;
+ 
+ 	handshake_state_set_authenticator_rsnxe(hs, bss->rsnxe);
+@@ -2700,9 +2701,15 @@ static bool station_fast_transition(struct station *station,
+ 	const struct iovec *vendor_ies;
+ 	size_t iov_elems = 0;
+ 
+-	/* Rebuild handshake RSN for target AP */
++	/*
++	 * Rebuild handshake RSN for target AP. The FT key hierarchy is
++	 * derived from the PMK of the current association, so a PMKSA cached
++	 * from an earlier association to this BSS must not replace it. If it
++	 * did, the PMKR1Name sent in the Reassociation Request would not
++	 * match the target AP's and it would reject it with Invalid PMKID.
++	 */
+ 	if (station_build_handshake_rsn(hs, station->wiphy,
+-				station->connected_network, bss) < 0)
++				station->connected_network, bss, false) < 0)
+ 		return false;
+ 
+ 	/* Reset the vendor_ies in case they're different */

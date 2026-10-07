@@ -186,7 +186,7 @@ signed build attestation: `gh attestation verify <file> --repo dapalab/orin-iwlw
 | Asset | What |
 |---|---|
 | `libell0`, `iwd` debs | Built here from upstream + Debian's packaging, ready to install |
-| `driver-src.tar.gz` | The backport driver source, our small [patches](patches/backport-iwlwifi/) for L4T, the AX210 firmware and the build script |
+| `driver-src.tar.gz` | The backport driver source, our small [patches](patches/backport-iwlwifi/), the AX210 firmware and the build script |
 | `install.sh` | Runs on the board: installs the debs, builds the driver, configures iwd and systemd-networkd |
 | `*.dsc`, `*.orig.tar.xz`, `*.debian.tar.xz`, `*.tar.sign` | Source packages for the debs: upstream's signed tarball + Debian's packaging with our changes |
 | `SHA256SUMS` | Checksums of everything above |
